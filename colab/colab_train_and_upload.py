@@ -30,7 +30,7 @@ import json
 # ──────────────────────────────────────────────
 
 # Which variants to train: "8b", "4b", or "both"
-TRAIN_VARIANTS = "both"
+TRAIN_VARIANTS = "4b"
 
 # 8B Model Config (A100 required, ~4.5GB GGUF)
 CONFIG_8B = {
