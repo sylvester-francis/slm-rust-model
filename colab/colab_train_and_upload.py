@@ -164,6 +164,81 @@ def step_train():
     print(f"  ✅ Training complete (loss: {stats.metrics['train_loss']:.4f})")
 
 
+MODEL_CARD = """---
+license: apache-2.0
+language:
+- en
+tags:
+- rust
+- programming
+- tutor
+- code-generation
+- qlora
+- unsloth
+base_model: Qwen/Qwen3-8B
+datasets:
+- Fortytwo-Network/Strandset-Rust-v1
+pipeline_tag: text-generation
+---
+
+# RustMentor-8B{suffix}
+
+Fine-tuned Qwen3-8B specialized in **Rust programming education and code review**.
+
+Designed for experienced Go/Python/TypeScript developers learning Rust. {deployment_note}
+
+## Capabilities
+
+- Rust ownership, borrowing, and lifetime explanations
+- Error handling patterns (Result, Option, ?)
+- Code review with borrow checker explanations
+- Async/await and Tokio patterns
+- Smart pointers (Box, Rc, Arc, RefCell)
+- Pattern matching and enum design
+- Trait-based architecture guidance
+- Type conversions (From, Into, AsRef, Deref)
+- Serde & serialization
+- CLI tooling with clap
+- Cargo project structure and workspaces
+- Comparisons to Go/Python/TypeScript equivalents
+
+## Training Details
+
+- **Base model**: Qwen3-8B
+- **Method**: QLoRA (r=32) with Unsloth optimization
+- **Dataset**: Strandset-Rust-v1 (3K samples) + 46 unique synthetic Rust tutor conversations across 28 topics
+- **Hardware**: A100 40GB (Google Colab)
+
+## Source
+
+- **Repository**: [github.com/sylvester-francis/slm-rust-model](https://github.com/sylvester-francis/slm-rust-model)
+
+## Citation
+
+```bibtex
+@software{{rust_mentor_2026,
+  author = {{Francis, Sylvester}},
+  title = {{RustMentor-8B: Fine-tuned Rust Programming Tutor}},
+  year = {{2026}},
+  url = {{https://github.com/sylvester-francis/slm-rust-model}}
+}}
+```
+"""
+
+
+def upload_model_card(repo_id, token, suffix="", deployment_note=""):
+    """Upload a model card README.md to a HuggingFace repo."""
+    from huggingface_hub import HfApi
+    api = HfApi(token=token)
+    card = MODEL_CARD.format(suffix=suffix, deployment_note=deployment_note)
+    api.upload_file(
+        path_or_fileobj=card.encode(),
+        path_in_repo="README.md",
+        repo_id=repo_id,
+        token=token,
+    )
+
+
 def step_upload():
     """Step 4: Upload adapter + push GGUF directly to HuggingFace (no local save)."""
     print("\n" + "─" * 60)
@@ -197,7 +272,9 @@ def step_upload():
         pass
     model.push_to_hub(repo_id, token=token)
     tokenizer.push_to_hub(repo_id, token=token)
-    print(f"  ✅ Adapter uploaded")
+    upload_model_card(repo_id, token,
+        deployment_note="Load with Hugging Face Transformers or deploy via Ollama.")
+    print(f"  ✅ Adapter + model card uploaded")
 
     # Push GGUF directly to HF — no local disk needed!
     gguf_repo = f"{HF_USERNAME}/rust-mentor-8b-GGUF"
@@ -212,7 +289,10 @@ def step_upload():
         quantization_method=GGUF_QUANT,
         token=token,
     )
-    print(f"  ✅ GGUF pushed")
+    upload_model_card(gguf_repo, token,
+        suffix=" (GGUF)",
+        deployment_note="Runs offline on Android (Pixel 8 Pro tested) via PocketPal AI. Q4_K_M quantization (~4.5GB).")
+    print(f"  ✅ GGUF + model card pushed")
 
     print(f"\n  🔗 Model: https://huggingface.co/{repo_id}")
     print(f"  🔗 GGUF:  https://huggingface.co/{gguf_repo}")
