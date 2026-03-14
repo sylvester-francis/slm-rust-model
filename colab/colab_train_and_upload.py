@@ -60,7 +60,7 @@ def setup_environment():
     # Install deps
     print("\n📦 Installing dependencies...")
     os.system("pip install -q unsloth trl peft accelerate bitsandbytes datasets huggingface_hub hf_transfer")
-    os.system("pip install -q --upgrade transformers")
+    os.system("pip install -q 'transformers>=4.51.3,<=5.2.0'")
 
     # Verify GPU
     import torch
@@ -69,7 +69,7 @@ def setup_environment():
         sys.exit(1)
 
     gpu_name = torch.cuda.get_device_name(0)
-    vram = torch.cuda.get_device_properties(0).total_mem / 1e9
+    vram = torch.cuda.get_device_properties(0).total_memory / 1e9
     print(f"\n✅ GPU: {gpu_name} ({vram:.1f} GB)")
 
     if vram < 35:

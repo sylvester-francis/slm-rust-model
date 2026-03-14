@@ -139,7 +139,7 @@ def train_model(
 
     gpu_stats = torch.cuda.get_device_properties(0)
     start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
-    max_memory = round(gpu_stats.total_mem / 1024 / 1024 / 1024, 3)
+    max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
     print(f"   GPU: {gpu_stats.name} ({max_memory} GB)")
     print(f"   Reserved: {start_gpu_memory} GB")
     print()
