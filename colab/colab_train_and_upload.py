@@ -164,49 +164,55 @@ def step_train():
     print(f"  ✅ Training complete (loss: {stats.metrics['train_loss']:.4f})")
 
 
-def step_convert():
-    """Step 4: Export to GGUF."""
-    print("\n" + "─" * 60)
-    print("  Step 4/5: Converting to GGUF")
-    print("─" * 60)
-
-    from scripts.convert_gguf import convert_to_gguf
-
-    output = convert_to_gguf(
-        model_dir="models/rust-mentor-8b",
-        quantization=GGUF_QUANT,
-    )
-    print(f"  ✅ GGUF exported: {output}")
-
-
 def step_upload():
-    """Step 5: Upload to HuggingFace."""
+    """Step 4: Upload adapter + push GGUF directly to HuggingFace (no local save)."""
     print("\n" + "─" * 60)
-    print("  Step 5/5: Uploading to HuggingFace")
+    print("  Step 4/4: Uploading to HuggingFace")
     print("─" * 60)
 
     if not HF_USERNAME:
         print("  ⏭️  Skipping upload (no HF credentials)")
         return
 
-    from scripts.upload_to_hf import upload_model
+    from unsloth import FastLanguageModel
+    from huggingface_hub import create_repo
 
-    # Upload LoRA adapter
+    token = os.environ.get("HF_TOKEN", "")
+
+    # Load the trained model
+    print("  Loading trained model...")
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name="models/rust-mentor-8b",
+        max_seq_length=MAX_SEQ_LENGTH,
+        dtype=None,
+        load_in_4bit=True,
+    )
+
+    # Upload LoRA adapter (small, ~100MB)
     repo_id = f"{HF_USERNAME}/rust-mentor-8b"
     print(f"  Uploading adapter → {repo_id}")
-    upload_model(
-        model_dir="models/rust-mentor-8b",
-        repo_id=repo_id,
-    )
+    try:
+        create_repo(repo_id, token=token, exist_ok=True, repo_type="model")
+    except Exception:
+        pass
+    model.push_to_hub(repo_id, token=token)
+    tokenizer.push_to_hub(repo_id, token=token)
+    print(f"  ✅ Adapter uploaded")
 
-    # Upload GGUF
+    # Push GGUF directly to HF — no local disk needed!
     gguf_repo = f"{HF_USERNAME}/rust-mentor-8b-GGUF"
-    print(f"  Uploading GGUF → {gguf_repo}")
-    upload_model(
-        model_dir="models/rust-mentor-8b",
-        repo_id=gguf_repo,
-        gguf=True,
+    print(f"  Pushing GGUF directly → {gguf_repo} (skips local save)")
+    try:
+        create_repo(gguf_repo, token=token, exist_ok=True, repo_type="model")
+    except Exception:
+        pass
+    model.push_to_hub_gguf(
+        gguf_repo,
+        tokenizer,
+        quantization_method=GGUF_QUANT,
+        token=token,
     )
+    print(f"  ✅ GGUF pushed")
 
     print(f"\n  🔗 Model: https://huggingface.co/{repo_id}")
     print(f"  🔗 GGUF:  https://huggingface.co/{gguf_repo}")
@@ -222,8 +228,7 @@ def main():
         ("Generate data", step_generate_data),
         ("Preprocess", step_preprocess),
         ("Train", step_train),
-        ("Convert GGUF", step_convert),
-        ("Upload", step_upload),
+        ("Upload + GGUF", step_upload),
     ]
 
     timings = {}
