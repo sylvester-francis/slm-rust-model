@@ -2,14 +2,18 @@
 
 ## Project Overview
 
-Fine-tuning pipeline for **RustMentor**, a Rust programming tutor model based on Qwen3-8B. Uses QLoRA via Unsloth for efficient training. Target deployment: offline on Android (Pixel 8 Pro) via PocketPal AI using GGUF format.
+Fine-tuning pipeline for **RustMentor**, a Rust programming tutor model. Supports two variants:
+- **8B** (Qwen3-8B, ~4.5GB GGUF) — higher quality, A100 required
+- **4B** (Qwen3-4B, ~2.5GB GGUF) — lighter, T4 compatible, better for mobile
+
+Uses QLoRA via Unsloth for efficient training. Target deployment: offline on Android (Pixel 8 Pro) via PocketPal AI or RustSensei app using GGUF format.
 
 ## Architecture
 
 ```
 slm.py                          → Unified CLI (dispatches to scripts/*)
 scripts/
-  data_collection.py            → Synthetic Rust tutor conversation generator (15 seed examples)
+  data_collection.py            → Synthetic Rust tutor conversation generator (46 seed examples, 28 topics)
   data_preprocessing.py         → Merges Strandset-Rust-v1 + synthetic data into training JSONL
   training.py                   → QLoRA fine-tuning with Unsloth + TRL SFTTrainer
   evaluation.py                 → Keyword-match evaluation on 5 Rust tutor prompts
@@ -17,7 +21,7 @@ scripts/
   upload_to_hf.py               → HuggingFace Hub upload with model card
   deploy_ollama.py              → Local Ollama deployment
 colab/
-  colab_train_and_upload.py     → Self-contained Colab pipeline (installs deps, runs all steps)
+  colab_train_and_upload.py     → Self-contained Colab pipeline (supports 8B, 4B, or both variants)
 ```
 
 ## Key Commands
@@ -34,16 +38,20 @@ python slm.py upload --username <user> --gguf  # Upload to HF
 
 ## Training Configuration
 
-- **Base model**: `unsloth/Qwen3-8B`
-- **LoRA**: r=32, alpha=32, targets all attention + MLP projections
-- **Training**: 3 epochs, batch_size=2, grad_accum=4, lr=2e-4, cosine scheduler
-- **Data**: ~500 synthetic (15 unique, rest duplicated) + ~3000 Strandset-Rust-v1 samples
+| Variant | Base Model | LoRA r | Batch | Grad Accum | GGUF Size |
+|---------|-----------|--------|-------|------------|-----------|
+| 8B | `unsloth/Qwen3-8B` | 32 | 2 | 4 | ~4.5GB |
+| 4B | `unsloth/Qwen3-4B` | 16 | 1 | 8 | ~2.5GB |
+
+- **Shared**: 3 epochs, lr=2e-4, cosine scheduler, all attention + MLP projections
+- **Data**: ~500 synthetic (46 unique, rest duplicated) + ~3000 Strandset-Rust-v1 samples
 - **Format**: Qwen3 chat template (system/user/assistant turns)
 - **Hardware**: A100 40GB required for 8B; T4 for 4B variant
+- **Colab**: Set `TRAIN_VARIANTS = "both"` / `"8b"` / `"4b"` in colab_train_and_upload.py
 
 ## Data Pipeline
 
-1. `data_collection.py` has 15 hand-written Rust tutoring conversations covering ownership, error handling, traits, lifetimes, strings, iterators, cargo, CLI, code review, concurrency, testing
+1. `data_collection.py` has 46 hand-written Rust tutoring conversations across 28 topics (ownership, error handling, traits, async, smart pointers, macros, serde, testing, etc.)
 2. `generate_rust_dataset()` duplicates seed examples to reach target count (no actual variation)
 3. `data_preprocessing.py` loads Strandset-Rust-v1 from HuggingFace, reformats to chat template, merges with synthetic data
 

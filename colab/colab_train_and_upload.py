@@ -2,10 +2,16 @@
 """
 RustMentor SLM - Google Colab Training Pipeline
 
-Automated pipeline: Generate data → Train → Evaluate → Export GGUF → Upload to HF
+Automated pipeline: Generate data → Preprocess → Train → Upload (adapter + GGUF)
+
+Supports training two model variants:
+- 8B (Qwen3-8B, ~4.5GB GGUF) — higher quality, A100 required
+- 4B (Qwen3-4B, ~2.5GB GGUF) — lighter, T4 compatible, better for mobile
+
+Set TRAIN_VARIANTS = "both" | "8b" | "4b" to control which variants to train.
 
 Requirements:
-- Google Colab Pro with A100 GPU (40GB VRAM)
+- Google Colab Pro with A100 GPU (40GB VRAM) for 8B, T4 for 4B only
 - HF_TOKEN in Colab Secrets (🔑 icon in left sidebar)
 
 Usage in Colab:
@@ -23,19 +29,40 @@ import json
 # CONFIGURATION — Edit these to customize
 # ──────────────────────────────────────────────
 
-# Model
-BASE_MODEL = "unsloth/Qwen3-8B"
+# Which variants to train: "8b", "4b", or "both"
+TRAIN_VARIANTS = "both"
+
+# 8B Model Config (A100 required, ~4.5GB GGUF)
+CONFIG_8B = {
+    "base_model": "unsloth/Qwen3-8B",
+    "lora_r": 32,
+    "lora_alpha": 32,
+    "batch_size": 2,
+    "grad_accum": 4,
+    "output_dir": "models/rust-mentor-8b",
+    "repo_name": "rust-mentor-8b",
+    "base_model_name": "Qwen/Qwen3-8B",
+    "param_count": "8B",
+    "gguf_size": "~4.5GB",
+}
+
+# 4B Model Config (T4 compatible, ~2.5GB GGUF)
+CONFIG_4B = {
+    "base_model": "unsloth/Qwen3-4B",
+    "lora_r": 16,
+    "lora_alpha": 16,
+    "batch_size": 1,
+    "grad_accum": 8,
+    "output_dir": "models/rust-mentor-4b",
+    "repo_name": "rust-mentor-4b",
+    "base_model_name": "Qwen/Qwen3-4B",
+    "param_count": "4B",
+    "gguf_size": "~2.5GB",
+}
+
+# Shared config
 MAX_SEQ_LENGTH = 2048
-MODEL_VARIANT = "standard"  # "standard" or "reasoning"
-
-# LoRA
-LORA_R = 32
-LORA_ALPHA = 32
-
-# Training
 EPOCHS = 3
-BATCH_SIZE = 2
-GRAD_ACCUM = 4
 LEARNING_RATE = 2e-4
 
 # Dataset
@@ -43,7 +70,7 @@ SYNTHETIC_SAMPLES = 500
 STRANDSET_SAMPLES = 3000
 
 # Export
-GGUF_QUANT = "q4_k_m"  # q4_k_m for Pixel 8 Pro, q5_k_m for higher quality
+GGUF_QUANT = "q4_k_m"  # q4_k_m for mobile, q5_k_m for higher quality
 
 # HuggingFace
 HF_USERNAME = ""  # Set below from secrets or manually
@@ -72,9 +99,9 @@ def setup_environment():
     vram = torch.cuda.get_device_properties(0).total_memory / 1e9
     print(f"\n✅ GPU: {gpu_name} ({vram:.1f} GB)")
 
-    if vram < 35:
+    if vram < 35 and TRAIN_VARIANTS in ("8b", "both"):
         print("⚠️  A100 (40GB) recommended for 8B model. T4 may OOM.")
-        print("   Consider using Qwen3-4B instead (set BASE_MODEL above).")
+        print("   Set TRAIN_VARIANTS = '4b' to train only the 4B variant.")
 
     # Load HF token — must be set as env var before running the script:
     #   In a Colab cell: import os; from google.colab import userdata; os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
@@ -100,7 +127,7 @@ def setup_environment():
 def step_generate_data():
     """Step 1: Generate synthetic Rust tutor data."""
     print("\n" + "─" * 60)
-    print("  Step 1/5: Generating Synthetic Rust Tutor Data")
+    print("  Step 1/4: Generating Synthetic Rust Tutor Data")
     print("─" * 60)
 
     # Add project root to path
@@ -127,7 +154,7 @@ Your teaching style:
 def step_preprocess():
     """Step 2: Preprocess and merge datasets."""
     print("\n" + "─" * 60)
-    print("  Step 2/5: Preprocessing & Merging Datasets")
+    print("  Step 2/4: Preprocessing & Merging Datasets")
     print("─" * 60)
 
     from scripts.data_preprocessing import preprocess_and_merge
@@ -141,27 +168,51 @@ def step_preprocess():
     print(f"  ✅ Merged dataset: {count} samples")
 
 
-def step_train():
-    """Step 3: Fine-tune with QLoRA."""
-    print("\n" + "─" * 60)
-    print("  Step 3/5: Training with QLoRA + Unsloth")
-    print("─" * 60)
+def step_train_variant(config):
+    """Train a single model variant with QLoRA."""
+    name = config["repo_name"]
+    print(f"\n  Training {name} ({config['base_model']})...")
 
     from scripts.training import train_model
 
     stats = train_model(
-        base_model=BASE_MODEL,
+        base_model=config["base_model"],
         data_path="data/processed/train.jsonl",
-        output_dir="models/rust-mentor-8b",
-        lora_r=LORA_R,
-        lora_alpha=LORA_ALPHA,
-        batch_size=BATCH_SIZE,
-        grad_accum=GRAD_ACCUM,
+        output_dir=config["output_dir"],
+        lora_r=config["lora_r"],
+        lora_alpha=config["lora_alpha"],
+        batch_size=config["batch_size"],
+        grad_accum=config["grad_accum"],
         epochs=EPOCHS,
         lr=LEARNING_RATE,
         max_seq_length=MAX_SEQ_LENGTH,
     )
-    print(f"  ✅ Training complete (loss: {stats.metrics['train_loss']:.4f})")
+    print(f"  ✅ {name} training complete (loss: {stats.metrics['train_loss']:.4f})")
+
+
+def step_train():
+    """Step 3: Fine-tune variant(s) with QLoRA."""
+    variants = _get_variants()
+    variant_names = " + ".join(c["repo_name"] for c in variants)
+    print("\n" + "─" * 60)
+    print(f"  Step 3/4: Training {variant_names} with QLoRA + Unsloth")
+    print("─" * 60)
+
+    for config in variants:
+        step_train_variant(config)
+
+
+def _get_variants():
+    """Return list of model configs to train/upload based on TRAIN_VARIANTS."""
+    if TRAIN_VARIANTS == "8b":
+        return [CONFIG_8B]
+    elif TRAIN_VARIANTS == "4b":
+        return [CONFIG_4B]
+    elif TRAIN_VARIANTS == "both":
+        return [CONFIG_8B, CONFIG_4B]
+    else:
+        print(f"⚠️  Unknown TRAIN_VARIANTS '{TRAIN_VARIANTS}', defaulting to 8b")
+        return [CONFIG_8B]
 
 
 ADAPTER_MODEL_CARD = """---
@@ -177,25 +228,25 @@ tags:
 - qlora
 - unsloth
 - lora
-base_model: Qwen/Qwen3-8B
+base_model: {base_model_name}
 datasets:
 - Fortytwo-Network/Strandset-Rust-v1
 pipeline_tag: text-generation
 ---
 
-# RustMentor-8B
+# RustMentor-{param_count}
 
-RustMentor-8B is an 8B-parameter Qwen3-based model fine-tuned for Rust programming education and code review. It bridges concepts from Go, Python, and TypeScript to teach Rust through practical examples and Socratic dialogue.
+RustMentor-{param_count} is a {param_count}-parameter Qwen3-based model fine-tuned for Rust programming education and code review. It bridges concepts from Go, Python, and TypeScript to teach Rust through practical examples and Socratic dialogue.
 
-This repository hosts the **LoRA adapter** weights. For quantized local inference, see [rust-mentor-8b-GGUF](https://huggingface.co/{username}/rust-mentor-8b-GGUF).
+This repository hosts the **LoRA adapter** weights. For quantized local inference, see [rust-mentor-{param_count_lower}-GGUF](https://huggingface.co/{username}/rust-mentor-{param_count_lower}-GGUF).
 
 ## Model Description
 
-- **Base Model**: Qwen/Qwen3-8B
+- **Base Model**: {base_model_name}
 - **Model Type**: Causal LM (code tutoring + review)
-- **Parameters**: 8B
+- **Parameters**: {param_count}
 - **Context Length**: 2048 tokens
-- **Fine-tuning**: QLoRA (r=32, alpha=32) with Unsloth optimization
+- **Fine-tuning**: QLoRA (r={lora_r}, alpha={lora_r}) with Unsloth optimization
 - **License**: Apache 2.0
 - **Language**: English, Rust code
 - **System Prompt**: Rust programming tutor for experienced Go/Python/TypeScript developers learning Rust by building CLI tools.
@@ -242,11 +293,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
 model = AutoModelForCausalLM.from_pretrained(
-    "{username}/rust-mentor-8b",
+    "{username}/rust-mentor-{param_count_lower}",
     torch_dtype=torch.float16,
     device_map="auto",
 )
-tokenizer = AutoTokenizer.from_pretrained("{username}/rust-mentor-8b")
+tokenizer = AutoTokenizer.from_pretrained("{username}/rust-mentor-{param_count_lower}")
 
 messages = [
     {{"role": "system", "content": "You are RustMentor, an expert Rust programming tutor."}},
@@ -275,13 +326,13 @@ print(tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_t
 
 | Parameter | Value |
 |-----------|-------|
-| Base Model | Qwen/Qwen3-8B |
+| Base Model | {base_model_name} |
 | Method | QLoRA via Unsloth |
-| LoRA Rank (r) | 32 |
-| LoRA Alpha | 32 |
+| LoRA Rank (r) | {lora_r} |
+| LoRA Alpha | {lora_r} |
 | Target Modules | q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj |
 | Epochs | 3 |
-| Batch Size | 2 x 4 (effective 8) |
+| Batch Size | {batch_size} x {grad_accum} (effective {effective_batch}) |
 | Learning Rate | 2e-4 (cosine schedule) |
 | Max Sequence Length | 2048 |
 | Hardware | NVIDIA A100 40GB (Google Colab) |
@@ -304,7 +355,7 @@ Qualitative checks on Rust tutoring prompts show:
 
 ## License
 
-Apache 2.0 for the fine-tuned adapter; base model (Qwen3-8B) license also applies.
+Apache 2.0 for the fine-tuned adapter; base model ({base_model_name}) license also applies.
 
 ## Contact
 
@@ -326,26 +377,26 @@ tags:
 - qlora
 - unsloth
 - gguf
-base_model: Qwen/Qwen3-8B
+base_model: {base_model_name}
 datasets:
 - Fortytwo-Network/Strandset-Rust-v1
 pipeline_tag: text-generation
 ---
 
-# RustMentor-8B-GGUF
+# RustMentor-{param_count}-GGUF
 
-RustMentor-8B-GGUF is an 8B-parameter Qwen3-based model fine-tuned for Rust programming education and code review. It merges the base model with LoRA adapters and includes GGUF quantization for local/mobile/Ollama workflows.
+RustMentor-{param_count}-GGUF is a {param_count}-parameter Qwen3-based model fine-tuned for Rust programming education and code review. It merges the base model with LoRA adapters and includes GGUF quantization for local/mobile/Ollama workflows.
 
-This repository hosts the **GGUF quantized model** (Q4_K_M) for lightweight inference. For the LoRA adapter, see [rust-mentor-8b](https://huggingface.co/{username}/rust-mentor-8b).
+This repository hosts the **GGUF quantized model** (Q4_K_M) for lightweight inference. For the LoRA adapter, see [rust-mentor-{param_count_lower}](https://huggingface.co/{username}/rust-mentor-{param_count_lower}).
 
 ## Model Description
 
-- **Base Model**: Qwen/Qwen3-8B
+- **Base Model**: {base_model_name}
 - **Model Type**: Causal LM (code tutoring + review)
-- **Parameters**: 8B
+- **Parameters**: {param_count}
 - **Context Length**: 2048 tokens
-- **Fine-tuning**: QLoRA (r=32, alpha=32) with Unsloth optimization
-- **Quantization**: Q4_K_M (~4.5GB)
+- **Fine-tuning**: QLoRA (r={lora_r}, alpha={lora_r}) with Unsloth optimization
+- **Quantization**: Q4_K_M ({gguf_size})
 - **License**: Apache 2.0
 - **Language**: English, Rust code
 - **System Prompt**: Rust programming tutor for experienced Go/Python/TypeScript developers learning Rust by building CLI tools.
@@ -389,8 +440,8 @@ This repository hosts the **GGUF quantized model** (Q4_K_M) for lightweight infe
 
 1. Install [PocketPal AI](https://play.google.com/store/apps/details?id=com.pocketpalai) from Play Store
 2. Tap "Add from Hugging Face"
-3. Search: `{username}/rust-mentor-8b-GGUF`
-4. Download the Q4_K_M quantization (~4.5GB)
+3. Search: `{username}/rust-mentor-{param_count_lower}-GGUF`
+4. Download the Q4_K_M quantization ({gguf_size})
 5. Create a "Pal" with the Rust tutor system prompt
 6. Enable airplane mode and start learning!
 
@@ -398,7 +449,7 @@ This repository hosts the **GGUF quantized model** (Q4_K_M) for lightweight infe
 
 ```bash
 # Download the GGUF
-huggingface-cli download {username}/rust-mentor-8b-GGUF \\
+huggingface-cli download {username}/rust-mentor-{param_count_lower}-GGUF \\
   --local-dir ./models/rust-mentor
 
 # Create Modelfile
@@ -419,7 +470,7 @@ ollama run rust-mentor "Explain Rust's ownership vs Go's garbage collector"
 ### llama.cpp
 
 ```bash
-huggingface-cli download {username}/rust-mentor-8b-GGUF \\
+huggingface-cli download {username}/rust-mentor-{param_count_lower}-GGUF \\
   --local-dir ./models
 
 ./llama-cli -m ./models/<gguf-filename>.gguf \\
@@ -436,13 +487,13 @@ huggingface-cli download {username}/rust-mentor-8b-GGUF \\
 
 | Parameter | Value |
 |-----------|-------|
-| Base Model | Qwen/Qwen3-8B |
+| Base Model | {base_model_name} |
 | Method | QLoRA via Unsloth |
-| LoRA Rank (r) | 32 |
-| LoRA Alpha | 32 |
+| LoRA Rank (r) | {lora_r} |
+| LoRA Alpha | {lora_r} |
 | Target Modules | q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj |
 | Epochs | 3 |
-| Batch Size | 2 x 4 (effective 8) |
+| Batch Size | {batch_size} x {grad_accum} (effective {effective_batch}) |
 | Learning Rate | 2e-4 (cosine schedule) |
 | Max Sequence Length | 2048 |
 | Hardware | NVIDIA A100 40GB (Google Colab) |
@@ -465,7 +516,7 @@ Qualitative checks on Rust tutoring prompts show:
 
 ## License
 
-Apache 2.0 for the fine-tuned model; base model (Qwen3-8B) license also applies.
+Apache 2.0 for the fine-tuned model; base model ({base_model_name}) license also applies.
 
 ## Contact
 
@@ -475,11 +526,21 @@ Apache 2.0 for the fine-tuned model; base model (Qwen3-8B) license also applies.
 """
 
 
-def upload_model_card(repo_id, token, card_template, username):
+def upload_model_card(repo_id, token, card_template, config, username):
     """Upload a model card README.md to a HuggingFace repo."""
     from huggingface_hub import HfApi
     api = HfApi(token=token)
-    card = card_template.format(username=username)
+    card = card_template.format(
+        username=username,
+        param_count=config["param_count"],
+        param_count_lower=config["param_count"].lower(),
+        base_model_name=config["base_model_name"],
+        lora_r=config["lora_r"],
+        batch_size=config["batch_size"],
+        grad_accum=config["grad_accum"],
+        effective_batch=config["batch_size"] * config["grad_accum"],
+        gguf_size=config["gguf_size"],
+    )
     api.upload_file(
         path_or_fileobj=card.encode(),
         path_in_repo="README.md",
@@ -488,32 +549,25 @@ def upload_model_card(repo_id, token, card_template, username):
     )
 
 
-def step_upload():
-    """Step 4: Upload adapter + push GGUF directly to HuggingFace (no local save)."""
-    print("\n" + "─" * 60)
-    print("  Step 4/4: Uploading to HuggingFace")
-    print("─" * 60)
-
-    if not HF_USERNAME:
-        print("  ⏭️  Skipping upload (no HF credentials)")
-        return
-
+def step_upload_variant(config):
+    """Upload a single variant's adapter + GGUF to HuggingFace."""
     from unsloth import FastLanguageModel
     from huggingface_hub import create_repo
 
     token = os.environ.get("HF_TOKEN", "")
+    name = config["repo_name"]
 
     # Load the trained model
-    print("  Loading trained model...")
+    print(f"\n  Loading trained model ({name})...")
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name="models/rust-mentor-8b",
+        model_name=config["output_dir"],
         max_seq_length=MAX_SEQ_LENGTH,
         dtype=None,
         load_in_4bit=True,
     )
 
-    # Upload LoRA adapter (small, ~100MB)
-    repo_id = f"{HF_USERNAME}/rust-mentor-8b"
+    # Upload LoRA adapter
+    repo_id = f"{HF_USERNAME}/{name}"
     print(f"  Uploading adapter → {repo_id}")
     try:
         create_repo(repo_id, token=token, exist_ok=True, repo_type="model")
@@ -521,11 +575,11 @@ def step_upload():
         pass
     model.push_to_hub(repo_id, token=token)
     tokenizer.push_to_hub(repo_id, token=token)
-    upload_model_card(repo_id, token, ADAPTER_MODEL_CARD, HF_USERNAME)
-    print(f"  ✅ Adapter + model card uploaded")
+    upload_model_card(repo_id, token, ADAPTER_MODEL_CARD, config, HF_USERNAME)
+    print(f"  ✅ {name} adapter + model card uploaded")
 
-    # Push GGUF directly to HF — no local disk needed!
-    gguf_repo = f"{HF_USERNAME}/rust-mentor-8b-GGUF"
+    # Push GGUF directly to HF
+    gguf_repo = f"{HF_USERNAME}/{name}-GGUF"
     print(f"  Pushing GGUF directly → {gguf_repo} (skips local save)")
     try:
         create_repo(gguf_repo, token=token, exist_ok=True, repo_type="model")
@@ -537,11 +591,26 @@ def step_upload():
         quantization_method=GGUF_QUANT,
         token=token,
     )
-    upload_model_card(gguf_repo, token, GGUF_MODEL_CARD, HF_USERNAME)
-    print(f"  ✅ GGUF + model card pushed")
+    upload_model_card(gguf_repo, token, GGUF_MODEL_CARD, config, HF_USERNAME)
+    print(f"  ✅ {name} GGUF + model card pushed")
 
-    print(f"\n  🔗 Model: https://huggingface.co/{repo_id}")
+    print(f"  🔗 Model: https://huggingface.co/{repo_id}")
     print(f"  🔗 GGUF:  https://huggingface.co/{gguf_repo}")
+
+
+def step_upload():
+    """Step 4: Upload all variant(s) to HuggingFace."""
+    print("\n" + "─" * 60)
+    print("  Step 4/4: Uploading to HuggingFace")
+    print("─" * 60)
+
+    if not HF_USERNAME:
+        print("  ⏭️  Skipping upload (no HF credentials)")
+        return
+
+    variants = _get_variants()
+    for config in variants:
+        step_upload_variant(config)
 
 
 def main():
@@ -584,7 +653,9 @@ def main():
     if HF_USERNAME:
         print(f"\n  📱 Next: Download the GGUF from HuggingFace to your Pixel 8 Pro")
         print(f"     → PocketPal AI → Add from Hugging Face")
-        print(f"     → Search: {HF_USERNAME}/rust-mentor-8b-GGUF")
+        for config in _get_variants():
+            name = config["repo_name"]
+            print(f"     → {HF_USERNAME}/{name}-GGUF ({config['gguf_size']})")
 
     print()
 
