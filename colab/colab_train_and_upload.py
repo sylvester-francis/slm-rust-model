@@ -76,11 +76,11 @@ def setup_environment():
         print("⚠️  A100 (40GB) recommended for 8B model. T4 may OOM.")
         print("   Consider using Qwen3-4B instead (set BASE_MODEL above).")
 
-    # Load HF token
+    # Load HF token — must be set as env var before running the script:
+    #   In a Colab cell: import os; from google.colab import userdata; os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
+    #   Then:            !python colab/colab_train_and_upload.py
     global HF_USERNAME
-    from google.colab import userdata
-    hf_token = userdata.get('HF_TOKEN')
-    os.environ["HF_TOKEN"] = hf_token
+    hf_token = os.environ.get("HF_TOKEN", "")
 
     if hf_token:
         print("✅ HF_TOKEN loaded")
