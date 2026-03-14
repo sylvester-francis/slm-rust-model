@@ -1,0 +1,33 @@
+# Models
+models/
+*.gguf
+*.bin
+*.safetensors
+
+# Data (keep processed templates)
+data/raw/
+data/processed/*.jsonl
+!data/processed/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Colab
+.ipynb_checkpoints/
