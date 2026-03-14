@@ -78,14 +78,9 @@ def setup_environment():
 
     # Load HF token
     global HF_USERNAME
-    hf_token = os.environ.get("HF_TOKEN", "")
-    if not hf_token:
-        try:
-            from google.colab import userdata
-            hf_token = userdata.get("HF_TOKEN")
-            os.environ["HF_TOKEN"] = hf_token
-        except Exception:
-            pass
+    from google.colab import userdata
+    hf_token = userdata.get('HF_TOKEN')
+    os.environ["HF_TOKEN"] = hf_token
 
     if hf_token:
         print("✅ HF_TOKEN loaded")
