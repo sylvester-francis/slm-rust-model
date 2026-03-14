@@ -164,7 +164,7 @@ def step_train():
     print(f"  ✅ Training complete (loss: {stats.metrics['train_loss']:.4f})")
 
 
-MODEL_CARD = """---
+ADAPTER_MODEL_CARD = """---
 license: apache-2.0
 language:
 - en
@@ -172,65 +172,314 @@ tags:
 - rust
 - programming
 - tutor
+- code-review
 - code-generation
 - qlora
 - unsloth
+- lora
 base_model: Qwen/Qwen3-8B
 datasets:
 - Fortytwo-Network/Strandset-Rust-v1
 pipeline_tag: text-generation
 ---
 
-# RustMentor-8B{suffix}
+# RustMentor-8B
 
-Fine-tuned Qwen3-8B specialized in **Rust programming education and code review**.
+RustMentor-8B is an 8B-parameter Qwen3-based model fine-tuned for Rust programming education and code review. It bridges concepts from Go, Python, and TypeScript to teach Rust through practical examples and Socratic dialogue.
 
-Designed for experienced Go/Python/TypeScript developers learning Rust. {deployment_note}
+This repository hosts the **LoRA adapter** weights. For quantized local inference, see [rust-mentor-8b-GGUF](https://huggingface.co/{username}/rust-mentor-8b-GGUF).
 
-## Capabilities
+## Model Description
 
-- Rust ownership, borrowing, and lifetime explanations
-- Error handling patterns (Result, Option, ?)
+- **Base Model**: Qwen/Qwen3-8B
+- **Model Type**: Causal LM (code tutoring + review)
+- **Parameters**: 8B
+- **Context Length**: 2048 tokens
+- **Fine-tuning**: QLoRA (r=32, alpha=32) with Unsloth optimization
+- **License**: Apache 2.0
+- **Language**: English, Rust code
+- **System Prompt**: Rust programming tutor for experienced Go/Python/TypeScript developers learning Rust by building CLI tools.
+
+## What It Is Good At
+
+- Explaining Rust ownership, borrowing, and lifetimes with Go/Python/TS comparisons
 - Code review with borrow checker explanations
+- Error handling patterns (Result, Option, ?, thiserror, anyhow)
 - Async/await and Tokio patterns
 - Smart pointers (Box, Rc, Arc, RefCell)
-- Pattern matching and enum design
-- Trait-based architecture guidance
+- Pattern matching and enum-based design
+- Trait-based architecture and generics
 - Type conversions (From, Into, AsRef, Deref)
-- Serde & serialization
+- Serde & JSON serialization
 - CLI tooling with clap
-- Cargo project structure and workspaces
-- Comparisons to Go/Python/TypeScript equivalents
+- Cargo project structure, modules, and workspaces
+- Testing patterns and documentation
 
-## Training Details
+## Intended Uses
 
-- **Base model**: Qwen3-8B
-- **Method**: QLoRA (r=32) with Unsloth optimization
-- **Dataset**: Strandset-Rust-v1 (3K samples) + 46 unique synthetic Rust tutor conversations across 28 topics
-- **Hardware**: A100 40GB (Google Colab)
+**Primary**: Rust programming tutoring, debugging, code review, and guided learning for developers transitioning from Go/Python/TypeScript.
 
-## Source
+**Out-of-scope**: General-purpose chat, non-Rust programming, safety-sensitive or factual tasks outside Rust development.
 
-- **Repository**: [github.com/sylvester-francis/slm-rust-model](https://github.com/sylvester-francis/slm-rust-model)
+## Prompt Examples
 
-## Citation
-
-```bibtex
-@software{{rust_mentor_2026,
-  author = {{Francis, Sylvester}},
-  title = {{RustMentor-8B: Fine-tuned Rust Programming Tutor}},
-  year = {{2026}},
-  url = {{https://github.com/sylvester-francis/slm-rust-model}}
-}}
 ```
+"In Go, I just pass values or pointers. What's this ownership thing in Rust?"
+
+"Review this Rust code and explain what the borrow checker is doing:\\n\\nfn get_longest(a: String, b: String) -> String {{\\n    if a.len() > b.len() {{ a }} else {{ b }}\\n}}"
+
+"How do I handle errors in Rust? I'm used to Go's if err != nil pattern."
+
+"How does async work in Rust? In Go I just use goroutines and it's simple."
+```
+
+## How to Use
+
+### Transformers
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+
+model = AutoModelForCausalLM.from_pretrained(
+    "{username}/rust-mentor-8b",
+    torch_dtype=torch.float16,
+    device_map="auto",
+)
+tokenizer = AutoTokenizer.from_pretrained("{username}/rust-mentor-8b")
+
+messages = [
+    {{"role": "system", "content": "You are RustMentor, an expert Rust programming tutor."}},
+    {{"role": "user", "content": "Explain Rust's ownership model to someone who knows Go."}},
+]
+input_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
+outputs = model.generate(
+    **inputs,
+    max_new_tokens=512,
+    temperature=0.7,
+    top_p=0.9,
+    do_sample=True,
+    pad_token_id=tokenizer.eos_token_id,
+)
+print(tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True))
+```
+
+## Training Data (Summary)
+
+- **Strandset-Rust-v1**: 3,000 samples of Rust code generation, review, refactoring, and bug detection tasks
+- **Synthetic tutor conversations**: 46 unique hand-crafted Rust tutoring dialogues across 28 topics, covering ownership, error handling, traits, async, smart pointers, macros, serde, testing, and more
+- **Style**: All conversations draw parallels to Go/Python/TypeScript equivalents
+
+## Training Configuration (QLoRA)
+
+| Parameter | Value |
+|-----------|-------|
+| Base Model | Qwen/Qwen3-8B |
+| Method | QLoRA via Unsloth |
+| LoRA Rank (r) | 32 |
+| LoRA Alpha | 32 |
+| Target Modules | q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj |
+| Epochs | 3 |
+| Batch Size | 2 x 4 (effective 8) |
+| Learning Rate | 2e-4 (cosine schedule) |
+| Max Sequence Length | 2048 |
+| Hardware | NVIDIA A100 40GB (Google Colab) |
+
+## Evaluation
+
+Qualitative checks on Rust tutoring prompts show:
+
+- Clear explanations with Go/Python/TypeScript comparisons
+- Accurate code examples with proper ownership and borrowing
+- Borrow checker explanations in code reviews
+- Appropriate use of idiomatic Rust patterns
+
+## Safety & Limitations
+
+- May generate incorrect code or hallucinate crate APIs — review before production use.
+- Not a replacement for the Rust compiler or clippy — always compile and test generated code.
+- Optimized for tutoring, not production code generation at scale.
+- Training data focuses on CLI/systems patterns; web framework coverage (Axum, Actix) is limited.
+
+## License
+
+Apache 2.0 for the fine-tuned adapter; base model (Qwen3-8B) license also applies.
+
+## Contact
+
+- **Maintainer**: Sylvester Francis ([@sylvester-francis](https://huggingface.co/{username}))
+- **Repository**: [github.com/sylvester-francis/slm-rust-model](https://github.com/sylvester-francis/slm-rust-model)
+- **Issues/feedback**: Open a discussion on the model repo
+"""
+
+GGUF_MODEL_CARD = """---
+license: apache-2.0
+language:
+- en
+tags:
+- rust
+- programming
+- tutor
+- code-review
+- code-generation
+- qlora
+- unsloth
+- gguf
+base_model: Qwen/Qwen3-8B
+datasets:
+- Fortytwo-Network/Strandset-Rust-v1
+pipeline_tag: text-generation
+---
+
+# RustMentor-8B-GGUF
+
+RustMentor-8B-GGUF is an 8B-parameter Qwen3-based model fine-tuned for Rust programming education and code review. It merges the base model with LoRA adapters and includes GGUF quantization for local/mobile/Ollama workflows.
+
+This repository hosts the **GGUF quantized model** (Q4_K_M) for lightweight inference. For the LoRA adapter, see [rust-mentor-8b](https://huggingface.co/{username}/rust-mentor-8b).
+
+## Model Description
+
+- **Base Model**: Qwen/Qwen3-8B
+- **Model Type**: Causal LM (code tutoring + review)
+- **Parameters**: 8B
+- **Context Length**: 2048 tokens
+- **Fine-tuning**: QLoRA (r=32, alpha=32) with Unsloth optimization
+- **Quantization**: Q4_K_M (~4.5GB)
+- **License**: Apache 2.0
+- **Language**: English, Rust code
+- **System Prompt**: Rust programming tutor for experienced Go/Python/TypeScript developers learning Rust by building CLI tools.
+
+## What It Is Good At
+
+- Explaining Rust ownership, borrowing, and lifetimes with Go/Python/TS comparisons
+- Code review with borrow checker explanations
+- Error handling patterns (Result, Option, ?, thiserror, anyhow)
+- Async/await and Tokio patterns
+- Smart pointers (Box, Rc, Arc, RefCell)
+- Pattern matching and enum-based design
+- Trait-based architecture and generics
+- Type conversions (From, Into, AsRef, Deref)
+- Serde & JSON serialization
+- CLI tooling with clap
+- Cargo project structure, modules, and workspaces
+- Testing patterns and documentation
+
+## Intended Uses
+
+**Primary**: Offline Rust programming tutor on Android (Pixel 8 Pro tested) via PocketPal AI, or local inference via Ollama/llama.cpp.
+
+**Out-of-scope**: General-purpose chat, non-Rust programming, safety-sensitive or factual tasks outside Rust development.
+
+## Prompt Examples
+
+```
+"In Go, I just pass values or pointers. What's this ownership thing in Rust?"
+
+"Review this Rust code and explain what the borrow checker is doing:\\n\\nfn get_longest(a: String, b: String) -> String {{\\n    if a.len() > b.len() {{ a }} else {{ b }}\\n}}"
+
+"How do I handle errors in Rust? I'm used to Go's if err != nil pattern."
+
+"How does async work in Rust? In Go I just use goroutines and it's simple."
+```
+
+## How to Use
+
+### PocketPal AI (Android — Offline)
+
+1. Install [PocketPal AI](https://play.google.com/store/apps/details?id=com.pocketpalai) from Play Store
+2. Tap "Add from Hugging Face"
+3. Search: `{username}/rust-mentor-8b-GGUF`
+4. Download the Q4_K_M quantization (~4.5GB)
+5. Create a "Pal" with the Rust tutor system prompt
+6. Enable airplane mode and start learning!
+
+### Ollama (Local)
+
+```bash
+# Download the GGUF
+huggingface-cli download {username}/rust-mentor-8b-GGUF \\
+  --local-dir ./models/rust-mentor
+
+# Create Modelfile
+cat > Modelfile << 'MODELFILE'
+FROM ./models/rust-mentor/<gguf-filename>.gguf
+
+SYSTEM \"\"\"You are RustMentor, an expert Rust programming tutor. The student is an experienced Go, Python, and TypeScript developer learning Rust by building CLI tools. Draw parallels to Go/Python/TypeScript concepts. Explain ownership, borrowing, and lifetimes with practical examples.\"\"\"
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER num_ctx 2048
+MODELFILE
+
+ollama create rust-mentor -f Modelfile
+ollama run rust-mentor "Explain Rust's ownership vs Go's garbage collector"
+```
+
+### llama.cpp
+
+```bash
+huggingface-cli download {username}/rust-mentor-8b-GGUF \\
+  --local-dir ./models
+
+./llama-cli -m ./models/<gguf-filename>.gguf \\
+  -p "Explain and fix this Rust borrow checker error..."
+```
+
+## Training Data (Summary)
+
+- **Strandset-Rust-v1**: 3,000 samples of Rust code generation, review, refactoring, and bug detection tasks
+- **Synthetic tutor conversations**: 46 unique hand-crafted Rust tutoring dialogues across 28 topics, covering ownership, error handling, traits, async, smart pointers, macros, serde, testing, and more
+- **Style**: All conversations draw parallels to Go/Python/TypeScript equivalents
+
+## Training Configuration (QLoRA)
+
+| Parameter | Value |
+|-----------|-------|
+| Base Model | Qwen/Qwen3-8B |
+| Method | QLoRA via Unsloth |
+| LoRA Rank (r) | 32 |
+| LoRA Alpha | 32 |
+| Target Modules | q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj |
+| Epochs | 3 |
+| Batch Size | 2 x 4 (effective 8) |
+| Learning Rate | 2e-4 (cosine schedule) |
+| Max Sequence Length | 2048 |
+| Hardware | NVIDIA A100 40GB (Google Colab) |
+
+## Evaluation
+
+Qualitative checks on Rust tutoring prompts show:
+
+- Clear explanations with Go/Python/TypeScript comparisons
+- Accurate code examples with proper ownership and borrowing
+- Borrow checker explanations in code reviews
+- Appropriate use of idiomatic Rust patterns
+
+## Safety & Limitations
+
+- May generate incorrect code or hallucinate crate APIs — review before production use.
+- Not a replacement for the Rust compiler or clippy — always compile and test generated code.
+- Optimized for tutoring, not production code generation at scale.
+- Training data focuses on CLI/systems patterns; web framework coverage (Axum, Actix) is limited.
+
+## License
+
+Apache 2.0 for the fine-tuned model; base model (Qwen3-8B) license also applies.
+
+## Contact
+
+- **Maintainer**: Sylvester Francis ([@sylvester-francis](https://huggingface.co/{username}))
+- **Repository**: [github.com/sylvester-francis/slm-rust-model](https://github.com/sylvester-francis/slm-rust-model)
+- **Issues/feedback**: Open a discussion on the model repo
 """
 
 
-def upload_model_card(repo_id, token, suffix="", deployment_note=""):
+def upload_model_card(repo_id, token, card_template, username):
     """Upload a model card README.md to a HuggingFace repo."""
     from huggingface_hub import HfApi
     api = HfApi(token=token)
-    card = MODEL_CARD.format(suffix=suffix, deployment_note=deployment_note)
+    card = card_template.format(username=username)
     api.upload_file(
         path_or_fileobj=card.encode(),
         path_in_repo="README.md",
@@ -272,8 +521,7 @@ def step_upload():
         pass
     model.push_to_hub(repo_id, token=token)
     tokenizer.push_to_hub(repo_id, token=token)
-    upload_model_card(repo_id, token,
-        deployment_note="Load with Hugging Face Transformers or deploy via Ollama.")
+    upload_model_card(repo_id, token, ADAPTER_MODEL_CARD, HF_USERNAME)
     print(f"  ✅ Adapter + model card uploaded")
 
     # Push GGUF directly to HF — no local disk needed!
@@ -289,9 +537,7 @@ def step_upload():
         quantization_method=GGUF_QUANT,
         token=token,
     )
-    upload_model_card(gguf_repo, token,
-        suffix=" (GGUF)",
-        deployment_note="Runs offline on Android (Pixel 8 Pro tested) via PocketPal AI. Q4_K_M quantization (~4.5GB).")
+    upload_model_card(gguf_repo, token, GGUF_MODEL_CARD, HF_USERNAME)
     print(f"  ✅ GGUF + model card pushed")
 
     print(f"\n  🔗 Model: https://huggingface.co/{repo_id}")
