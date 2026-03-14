@@ -31,3 +31,11 @@ Thumbs.db
 
 # Colab
 .ipynb_checkpoints/
+
+# Internal docs (keep README.md public)
+docs/COLAB.md
+docs/MOBILE.md
+docs/MODEL_CARD.md
+docs/QUICK_START.md
+docs/ANDROID_APP_PROMPT.md
+docs/README.md
