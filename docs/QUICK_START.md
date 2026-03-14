@@ -4,7 +4,7 @@ Get RustMentor running in under 5 minutes.
 
 ## Option 1: Google Colab (Recommended)
 
-**Requirements**: Google Colab Pro (A100 GPU), HuggingFace account
+**Requirements**: Google Colab with A100 GPU, HuggingFace account with write token
 
 ### Steps
 
@@ -14,33 +14,28 @@ Get RustMentor running in under 5 minutes.
 4. Run these cells:
 
 ```python
-# Cell 1: Clone repo
+# Cell 1: Clone repo and set HF token
+import os
+from google.colab import userdata
+os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
+
 !git clone https://github.com/sylvester-francis/slm-rust-model.git
 %cd slm-rust-model
+```
 
-# Cell 2: Run full pipeline (~60 min)
+```python
+# Cell 2: Run full pipeline
 !python colab/colab_train_and_upload.py
 ```
 
-That's it! The script will:
-- Generate synthetic Rust tutor data
-- Download and merge Strandset-Rust-v1 code examples
-- Fine-tune Qwen3-8B with QLoRA
-- Export to GGUF (Q4_K_M)
-- Upload to your HuggingFace account
+The script will:
+- Generate 46 synthetic Rust tutor conversations across 28 topics
+- Download and merge Strandset-Rust-v1 code examples (~3,000 samples)
+- Fine-tune Qwen3-8B with QLoRA on A100
+- Upload LoRA adapter to HuggingFace
+- Push GGUF (Q4_K_M) directly to HuggingFace (no local disk needed)
 
-## Option 2: Local Training
-
-**Requirements**: NVIDIA GPU with 40GB+ VRAM (A100, A6000, etc.)
-
-```bash
-git clone https://github.com/sylvester-francis/slm-rust-model.git
-cd slm-rust-model
-pip install -r requirements.txt
-python slm.py pipeline --username your-hf-username
-```
-
-## Option 3: Use a Pre-trained Model
+## Option 2: Use the Pre-trained Model
 
 If you just want to use the model without training:
 
@@ -51,14 +46,7 @@ If you just want to use the model without training:
 4. Download Q4_K_M (~4.5GB)
 5. Create a Pal with the system prompt from the README
 
-### On Desktop (Ollama)
-```bash
-# After converting locally
-python slm.py deploy
-ollama run rust-mentor-8b
-```
-
 ## Next Steps
 
 - **[Colab Guide](COLAB.md)** — Detailed training options and customization
-- **[Mobile Guide](MOBILE.md)** — PocketPal setup and tips for airplane use
+- **[Mobile Guide](MOBILE.md)** — PocketPal setup and flight preparation
