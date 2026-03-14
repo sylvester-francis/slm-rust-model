@@ -4,14 +4,17 @@ RustMentor SLM - Google Colab Training Pipeline
 
 Automated pipeline: Generate data → Preprocess → Train → Upload (adapter + GGUF)
 
-Supports training two model variants:
-- 8B (Qwen3-8B, ~4.5GB GGUF) — higher quality, A100 required
-- 4B (Qwen3-4B, ~2.5GB GGUF) — lighter, T4 compatible, better for mobile
+Supports training four model variants:
+- 8B  (Qwen3-8B,   ~4.5GB GGUF) — highest quality, A100 required
+- 4B  (Qwen3-4B,   ~2.5GB GGUF) — lighter, T4 compatible
+- 1.7B (Qwen3-1.7B, ~1.1GB GGUF) — fast on-device chat, T4/free Colab
+- 0.6B (Qwen3-0.6B, ~0.4GB GGUF) — ultra-light, instant mobile responses
 
-Set TRAIN_VARIANTS = "both" | "8b" | "4b" to control which variants to train.
+Set TRAIN_VARIANTS to control which variants to train:
+  "8b" | "4b" | "1.7b" | "0.6b" | "all" | "mobile" (1.7b+0.6b) | "both" (8b+4b)
 
 Requirements:
-- Google Colab Pro with A100 GPU (40GB VRAM) for 8B, T4 for 4B only
+- Google Colab Pro with A100 GPU (40GB VRAM) for 8B; T4 or free Colab for smaller variants
 - HF_TOKEN in Colab Secrets (🔑 icon in left sidebar)
 
 Usage in Colab:
@@ -29,8 +32,8 @@ import json
 # CONFIGURATION — Edit these to customize
 # ──────────────────────────────────────────────
 
-# Which variants to train: "8b", "4b", or "both"
-TRAIN_VARIANTS = "both"
+# Which variants to train: "8b", "4b", "1.7b", "0.6b", "all", "mobile" (1.7b+0.6b), "both" (8b+4b)
+TRAIN_VARIANTS = "mobile"
 
 # 8B Model Config (A100 required, ~4.5GB GGUF)
 CONFIG_8B = {
@@ -59,6 +62,35 @@ CONFIG_4B = {
     "param_count": "4B",
     "gguf_size": "~2.5GB",
 }
+
+# 1.7B Model Config (T4/free Colab, ~1.1GB GGUF — fast on-device chat)
+CONFIG_1_7B = {
+    "base_model": "unsloth/Qwen3-1.7B",
+    "lora_r": 16,
+    "lora_alpha": 16,
+    "batch_size": 2,
+    "grad_accum": 4,
+    "output_dir": "models/rust-mentor-1.7b",
+    "repo_name": "rust-mentor-1.7b",
+    "base_model_name": "Qwen/Qwen3-1.7B",
+    "param_count": "1.7B",
+    "gguf_size": "~1.1GB",
+}
+
+# 0.6B Model Config (any GPU, ~0.4GB GGUF — ultra-light quick exercise debugs)
+CONFIG_0_6B = {
+    "base_model": "unsloth/Qwen3-0.6B",
+    "lora_r": 8,
+    "lora_alpha": 8,
+    "batch_size": 4,
+    "grad_accum": 2,
+    "output_dir": "models/rust-mentor-0.6b",
+    "repo_name": "rust-mentor-0.6b",
+    "base_model_name": "Qwen/Qwen3-0.6B",
+    "param_count": "0.6B",
+    "gguf_size": "~0.4GB",
+}
+
 
 # Shared config
 MAX_SEQ_LENGTH = 2048
@@ -99,9 +131,9 @@ def setup_environment():
     vram = torch.cuda.get_device_properties(0).total_memory / 1e9
     print(f"\n✅ GPU: {gpu_name} ({vram:.1f} GB)")
 
-    if vram < 35 and TRAIN_VARIANTS in ("8b", "both"):
+    if vram < 35 and TRAIN_VARIANTS in ("8b", "both", "all"):
         print("⚠️  A100 (40GB) recommended for 8B model. T4 may OOM.")
-        print("   Set TRAIN_VARIANTS = '4b' to train only the 4B variant.")
+        print("   Set TRAIN_VARIANTS = 'mobile' for 1.7B+0.6B, or '4b' for 4B only.")
 
     # Load HF token — must be set as env var before running the script:
     #   In a Colab cell: import os; from google.colab import userdata; os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
@@ -204,15 +236,20 @@ def step_train():
 
 def _get_variants():
     """Return list of model configs to train/upload based on TRAIN_VARIANTS."""
-    if TRAIN_VARIANTS == "8b":
-        return [CONFIG_8B]
-    elif TRAIN_VARIANTS == "4b":
-        return [CONFIG_4B]
-    elif TRAIN_VARIANTS == "both":
-        return [CONFIG_8B, CONFIG_4B]
-    else:
-        print(f"⚠️  Unknown TRAIN_VARIANTS '{TRAIN_VARIANTS}', defaulting to 8b")
-        return [CONFIG_8B]
+    variant_map = {
+        "8b": [CONFIG_8B],
+        "4b": [CONFIG_4B],
+        "1.7b": [CONFIG_1_7B],
+        "0.6b": [CONFIG_0_6B],
+        "both": [CONFIG_8B, CONFIG_4B],
+        "mobile": [CONFIG_1_7B, CONFIG_0_6B],
+        "all": [CONFIG_8B, CONFIG_4B, CONFIG_1_7B, CONFIG_0_6B],
+    }
+    configs = variant_map.get(TRAIN_VARIANTS)
+    if configs is None:
+        print(f"⚠️  Unknown TRAIN_VARIANTS '{TRAIN_VARIANTS}', defaulting to mobile (1.7b+0.6b)")
+        return [CONFIG_1_7B, CONFIG_0_6B]
+    return configs
 
 
 ADAPTER_MODEL_CARD = """---

@@ -42,6 +42,38 @@ DEFAULT_LR = 2e-4
 DEFAULT_SEQ_LENGTH = 2048
 DEFAULT_GGUF_QUANT = "q4_k_m"
 
+# Variant presets — use with --variant flag
+VARIANT_CONFIGS = {
+    "8b": {
+        "model": "unsloth/Qwen3-8B",
+        "lora_r": 32, "lora_alpha": 32,
+        "batch_size": 2, "grad_accum": 4,
+        "output_dir": "models/rust-mentor-8b",
+        "deploy_name": "rust-mentor-8b",
+    },
+    "4b": {
+        "model": "unsloth/Qwen3-4B",
+        "lora_r": 16, "lora_alpha": 16,
+        "batch_size": 1, "grad_accum": 8,
+        "output_dir": "models/rust-mentor-4b",
+        "deploy_name": "rust-mentor-4b",
+    },
+    "1.7b": {
+        "model": "unsloth/Qwen3-1.7B",
+        "lora_r": 16, "lora_alpha": 16,
+        "batch_size": 2, "grad_accum": 4,
+        "output_dir": "models/rust-mentor-1.7b",
+        "deploy_name": "rust-mentor-1.7b",
+    },
+    "0.6b": {
+        "model": "unsloth/Qwen3-0.6B",
+        "lora_r": 8, "lora_alpha": 8,
+        "batch_size": 4, "grad_accum": 2,
+        "output_dir": "models/rust-mentor-0.6b",
+        "deploy_name": "rust-mentor-0.6b",
+    },
+}
+
 SYSTEM_PROMPT = """You are RustMentor, an expert Rust programming tutor. The student is an experienced Go, Python, and TypeScript developer learning Rust by building CLI tools.
 
 Your teaching style:
@@ -52,6 +84,34 @@ Your teaching style:
 - Guide them to write the code themselves rather than giving full solutions
 - Use the Socratic method when appropriate
 """
+
+
+def _apply_variant(args):
+    """If --variant is set, override args with preset values (unless explicitly provided)."""
+    variant = getattr(args, "variant", None)
+    if not variant:
+        return
+    cfg = VARIANT_CONFIGS.get(variant)
+    if not cfg:
+        print(f"⚠️  Unknown variant '{variant}'. Available: {', '.join(VARIANT_CONFIGS)}")
+        sys.exit(1)
+    # Only override if the user didn't pass a flag explicitly (still at default)
+    if args.model == DEFAULT_BASE_MODEL:
+        args.model = cfg["model"]
+    if args.lora_r == DEFAULT_LORA_R:
+        args.lora_r = cfg["lora_r"]
+    if args.lora_alpha == DEFAULT_LORA_ALPHA:
+        args.lora_alpha = cfg["lora_alpha"]
+    if args.batch_size == DEFAULT_BATCH_SIZE:
+        args.batch_size = cfg["batch_size"]
+    if args.grad_accum == DEFAULT_GRAD_ACCUM:
+        args.grad_accum = cfg["grad_accum"]
+    if not args.output:
+        args.output = str(MODELS_DIR / cfg["output_dir"].split("/")[-1])
+    if not getattr(args, "model_dir", None):
+        args.model_dir = str(MODELS_DIR / cfg["output_dir"].split("/")[-1])
+    if not getattr(args, "name", None):
+        args.name = cfg["deploy_name"]
 
 
 def cmd_info(args):
@@ -139,6 +199,7 @@ def cmd_train(args):
     """Train model with QLoRA."""
     from scripts.training import train_model
 
+    _apply_variant(args)
     data_path = args.data or str(PROCESSED_DIR / "train.jsonl")
     output_dir = args.output or str(MODELS_DIR / "rust-mentor-8b")
 
@@ -170,6 +231,7 @@ def cmd_evaluate(args):
     """Evaluate model quality."""
     from scripts.evaluation import evaluate_model
 
+    _apply_variant(args)
     model_dir = args.model_dir or str(MODELS_DIR / "rust-mentor-8b")
     print(f"\n🦀 Evaluating model: {model_dir}")
 
@@ -186,6 +248,7 @@ def cmd_convert(args):
     """Convert model to GGUF format."""
     from scripts.convert_gguf import convert_to_gguf
 
+    _apply_variant(args)
     model_dir = args.model_dir or str(MODELS_DIR / "rust-mentor-8b")
     quant = args.quant or DEFAULT_GGUF_QUANT
 
@@ -203,8 +266,10 @@ def cmd_upload(args):
     """Upload model to HuggingFace Hub."""
     from scripts.upload_to_hf import upload_model
 
+    _apply_variant(args)
     model_dir = args.model_dir or str(MODELS_DIR / "rust-mentor-8b")
-    repo = f"{args.username}/rust-mentor-8b"
+    variant = getattr(args, "variant", None) or "8b"
+    repo = f"{args.username}/rust-mentor-{variant}"
 
     if args.gguf:
         repo += "-GGUF"
@@ -222,6 +287,7 @@ def cmd_deploy(args):
     """Deploy model to Ollama."""
     from scripts.deploy_ollama import deploy_to_ollama
 
+    _apply_variant(args)
     model_name = args.name or "rust-mentor-8b"
     print(f"\n🦀 Deploying to Ollama: {model_name}")
 
@@ -231,6 +297,7 @@ def cmd_deploy(args):
 
 def cmd_pipeline(args):
     """Run complete pipeline: collect → preprocess → train → evaluate → convert → upload."""
+    _apply_variant(args)
     print("\n🦀 RustMentor SLM - Full Pipeline")
     print("=" * 50)
 
@@ -269,11 +336,13 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python slm.py info                          # System information
-  python slm.py pipeline --username myuser    # Full pipeline
-  python slm.py train --epochs 5 --lora-r 64  # Custom training
-  python slm.py convert --quant q5_k_m        # Higher quality GGUF
-  python slm.py upload --username myuser --gguf  # Upload GGUF
+  python slm.py info                                  # System information
+  python slm.py pipeline --variant 0.6b --username u  # Full pipeline for 0.6B
+  python slm.py train --variant 1.7b                  # Train 1.7B mobile variant
+  python slm.py train --variant 0.6b                  # Train ultra-light 0.6B
+  python slm.py train --epochs 5 --lora-r 64          # Custom training
+  python slm.py convert --variant 0.6b                # Export 0.6B to GGUF
+  python slm.py upload --variant 1.7b --username u --gguf  # Upload GGUF
         """,
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
@@ -294,6 +363,7 @@ Examples:
 
     # train
     p = subparsers.add_parser("train", help="Train model with QLoRA")
+    p.add_argument("--variant", choices=list(VARIANT_CONFIGS), help="Preset: 8b, 4b, 1.7b, 0.6b")
     p.add_argument("--model", default=DEFAULT_BASE_MODEL, help="Base model")
     p.add_argument("--data", type=str, help="Training data JSONL")
     p.add_argument("--output", type=str, help="Output directory")
@@ -307,25 +377,30 @@ Examples:
 
     # evaluate
     p = subparsers.add_parser("evaluate", help="Evaluate trained model")
+    p.add_argument("--variant", choices=list(VARIANT_CONFIGS), help="Preset: 8b, 4b, 1.7b, 0.6b")
     p.add_argument("--model-dir", type=str, help="Model directory")
 
     # convert
     p = subparsers.add_parser("convert", help="Convert to GGUF format")
+    p.add_argument("--variant", choices=list(VARIANT_CONFIGS), help="Preset: 8b, 4b, 1.7b, 0.6b")
     p.add_argument("--model-dir", type=str, help="Model directory")
     p.add_argument("--quant", default=DEFAULT_GGUF_QUANT, help="Quantization type")
 
     # upload
     p = subparsers.add_parser("upload", help="Upload to HuggingFace")
+    p.add_argument("--variant", choices=list(VARIANT_CONFIGS), help="Preset: 8b, 4b, 1.7b, 0.6b")
     p.add_argument("--username", required=True, help="HF username")
     p.add_argument("--model-dir", type=str, help="Model directory")
     p.add_argument("--gguf", action="store_true", help="Upload GGUF version")
 
     # deploy
     p = subparsers.add_parser("deploy", help="Deploy to Ollama")
+    p.add_argument("--variant", choices=list(VARIANT_CONFIGS), help="Preset: 8b, 4b, 1.7b, 0.6b")
     p.add_argument("--name", type=str, help="Ollama model name")
 
     # pipeline
     p = subparsers.add_parser("pipeline", help="Run complete pipeline")
+    p.add_argument("--variant", choices=list(VARIANT_CONFIGS), help="Preset: 8b, 4b, 1.7b, 0.6b")
     p.add_argument("--username", type=str, help="HF username (enables upload)")
     p.add_argument("--model", default=DEFAULT_BASE_MODEL)
     p.add_argument("--samples", type=int, default=500)

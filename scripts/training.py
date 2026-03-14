@@ -2,8 +2,10 @@
 Training: QLoRA fine-tuning with Unsloth optimization.
 
 Supports:
-- Qwen3-8B (A100 required, recommended)
-- Qwen3-4B (T4 compatible, lighter)
+- Qwen3-8B   (A100 required, highest quality)
+- Qwen3-4B   (T4 compatible, lighter)
+- Qwen3-1.7B (T4/free Colab, fast on-device chat)
+- Qwen3-0.6B (any GPU, ultra-light mobile)
 - Custom base models via --model flag
 
 Uses Unsloth for 2x faster training with 70% less VRAM.
