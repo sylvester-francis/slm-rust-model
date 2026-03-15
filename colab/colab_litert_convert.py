@@ -133,7 +133,7 @@ print(f"  ✅ Merged")
     run("pip install -q litert-torch 'protobuf>=5.26,<7.0'")
     run("pip install -q 'torchao==0.11.0' --force-reinstall --no-deps")
 
-    # ── STEP 4: Convert to LiteRT .tflite using Google's official CLI ──
+    # ── STEP 4: Convert to .tflite then bundle into .litertlm ──
     BUILTIN_SIZES = ["0.6b", "1.7b", "4b"]
 
     for variant in VARIANTS:
@@ -141,28 +141,45 @@ print(f"  ✅ Merged")
         output_dir = f"models/rust-mentor-{variant}-litert"
         prefix = f"rust_mentor_{variant.replace('.', '_')}"
 
+        if variant not in BUILTIN_SIZES:
+            print(f"  ⚠️  {variant} not supported by official CLI, skipping")
+            continue
+
+        # Step 4a: Convert to .tflite
         print(f"\n{'=' * 60}")
-        print(f"  Convert {variant} to LiteRT")
+        print(f"  Convert {variant} → .tflite")
         print(f"{'=' * 60}\n")
 
-        if variant in BUILTIN_SIZES:
-            run(
-                f"python -m litert_torch.generative.examples.qwen.convert_v3_to_tflite"
-                f" --model_size={variant}"
-                f" --checkpoint_path={merged_dir}"
-                f" --output_path={output_dir}"
-                f" --output_name_prefix={prefix}"
-                f" --quantize={LITERT_QUANT}"
-                f" --kv_cache_max_len={KV_CACHE_LEN}"
-            )
-            # Clean up merged dir to save disk for next variant
-            import shutil
-            merged_path = os.path.join(output_dir, "merged")
-            if os.path.exists(merged_path):
-                print(f"  Cleaning up {merged_path}...")
-                shutil.rmtree(merged_path)
-        else:
-            print(f"  ⚠️  {variant} needs custom converter, skipping")
+        run(
+            f"python -m litert_torch.generative.examples.qwen.convert_v3_to_tflite"
+            f" --model_size={variant}"
+            f" --checkpoint_path={merged_dir}"
+            f" --output_path={output_dir}"
+            f" --output_name_prefix={prefix}"
+            f" --quantize={LITERT_QUANT}"
+            f" --kv_cache_max_len={KV_CACHE_LEN}"
+        )
+
+        # Step 4b: Bundle .tflite + tokenizer → .litertlm
+        print(f"\n{'=' * 60}")
+        print(f"  Bundle {variant} → .litertlm")
+        print(f"{'=' * 60}\n")
+
+        run(
+            f"python scripts/bundle_litertlm.py"
+            f" --tflite={output_dir}"
+            f" --tokenizer={merged_dir}"
+            f" --output={output_dir}"
+            f" --context_length={KV_CACHE_LEN}"
+            f" --model_type=qwen3"
+        )
+
+        # Clean up merged dir to save disk for next variant
+        import shutil
+        merged_path = os.path.join(output_dir, "merged")
+        if os.path.exists(merged_path):
+            print(f"  Cleaning up {merged_path}...")
+            shutil.rmtree(merged_path)
 
     # ── STEP 5: Upload LiteRT to HuggingFace ──
     upload_parts = []
