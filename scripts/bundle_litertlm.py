@@ -55,6 +55,7 @@ def main():
     workdir = os.path.join(args.output, "_bundle_tmp")
     os.makedirs(workdir, exist_ok=True)
 
+    # Qwen3 stop tokens: <|im_end|>=151645, <|endoftext|>=151643
     build_litertlm(
         tflite_model_path=tflite_path,
         workdir=workdir,
@@ -62,6 +63,7 @@ def main():
         context_length=args.context_length,
         hf_tokenizer_model_path=tokenizer_path,
         llm_model_type=args.model_type,
+        stop_token_ids=[151645, 151643],
     )
 
     # Clean up temp
