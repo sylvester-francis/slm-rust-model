@@ -34,8 +34,18 @@ def main():
             return
         tflite_path = tflites[0]
 
+    # Resolve tokenizer path — build_litertlm needs the tokenizer.json FILE, not directory
+    tokenizer_path = args.tokenizer
+    if os.path.isdir(tokenizer_path):
+        candidate = os.path.join(tokenizer_path, "tokenizer.json")
+        if os.path.exists(candidate):
+            tokenizer_path = candidate
+        else:
+            print(f"  No tokenizer.json found in {tokenizer_path}")
+            return
+
     print(f"Bundling: {tflite_path}")
-    print(f"Tokenizer: {args.tokenizer}")
+    print(f"Tokenizer: {tokenizer_path}")
     print(f"Output: {args.output}")
     print(f"Context: {args.context_length}")
 
@@ -50,7 +60,7 @@ def main():
         workdir=workdir,
         output_path=args.output,
         context_length=args.context_length,
-        hf_tokenizer_model_path=args.tokenizer,
+        hf_tokenizer_model_path=tokenizer_path,
         llm_model_type=args.model_type,
     )
 
