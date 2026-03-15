@@ -31,12 +31,48 @@ LITERT_MODEL_SIZES = {
     "4b": "4b",
 }
 
+# Unsloth saves the bnb-4bit quantized model name in the adapter config.
+# For merging we need the full-precision base model to avoid rounding errors.
+BNB4BIT_TO_FULL = {
+    "unsloth/qwen3-0.6b-unsloth-bnb-4bit": "Qwen/Qwen3-0.6B",
+    "unsloth/qwen3-1.7b-unsloth-bnb-4bit": "Qwen/Qwen3-1.7B",
+    "unsloth/qwen3-4b-unsloth-bnb-4bit": "Qwen/Qwen3-4B",
+    "unsloth/qwen3-8b-unsloth-bnb-4bit": "Qwen/Qwen3-8B",
+    "unsloth/Qwen3-0.6B": "Qwen/Qwen3-0.6B",
+    "unsloth/Qwen3-1.7B": "Qwen/Qwen3-1.7B",
+    "unsloth/Qwen3-4B": "Qwen/Qwen3-4B",
+    "unsloth/Qwen3-8B": "Qwen/Qwen3-8B",
+}
+
+
+def _resolve_full_precision_model(base_model: str) -> str:
+    """Map quantized/unsloth model names to full-precision HF equivalents."""
+    # Direct lookup
+    resolved = BNB4BIT_TO_FULL.get(base_model)
+    if resolved:
+        return resolved
+    # Case-insensitive fallback
+    for key, val in BNB4BIT_TO_FULL.items():
+        if key.lower() == base_model.lower():
+            return val
+    # If it contains "bnb-4bit" or "unsloth", try to derive the Qwen name
+    if "bnb-4bit" in base_model.lower() or "unsloth" in base_model.lower():
+        # e.g. "unsloth/qwen3-8b-unsloth-bnb-4bit" → extract "Qwen3-8B"
+        name = base_model.split("/")[-1]
+        name = name.replace("-unsloth-bnb-4bit", "").replace("-bnb-4bit", "")
+        # Capitalize properly: qwen3-8b → Qwen3-8B
+        parts = name.split("-")
+        if len(parts) >= 2:
+            model_name = parts[0].capitalize() + parts[0][1:].replace(parts[0][0], "") + "-" + parts[1].upper()
+            return f"Qwen/{name}"
+    return base_model
+
 
 def merge_adapter(adapter_dir: str, output_dir: str, base_model: str = None) -> str:
     """Merge QLoRA adapter weights back into the base model.
 
     LiteRT requires a standard checkpoint, not a PEFT/LoRA checkpoint.
-    This merges the adapter and saves a full model.
+    This merges the adapter in full precision (fp16) to avoid rounding errors.
 
     Args:
         adapter_dir: Path to the QLoRA adapter (e.g. models/rust-mentor-0.6b)
@@ -64,7 +100,13 @@ def merge_adapter(adapter_dir: str, output_dir: str, base_model: str = None) -> 
         base_model = peft_config.base_model_name_or_path
         print(f"    Base model (from adapter config): {base_model}")
 
-    print(f"    Loading base model: {base_model}")
+    # Resolve to full-precision model to avoid 4-bit merge rounding errors
+    full_model = _resolve_full_precision_model(base_model)
+    if full_model != base_model:
+        print(f"    Resolved to full precision: {base_model} → {full_model}")
+    base_model = full_model
+
+    print(f"    Loading base model: {base_model} (fp16)")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         torch_dtype=torch.float16,
