@@ -860,10 +860,12 @@ def step_convert_litert():
     print(f"  Step 4/5: Converting {variant_names} to LiteRT")
     print("─" * 60)
 
-    # Training is done by this point, so torch/xformers compatibility no longer matters.
-    # Install litert-torch normally and pin protobuf to keep HF upload working.
+    # Training is done by this point. litert-torch downgrades torch to 2.9.x which
+    # breaks torchvision/torchaudio/xformers (compiled for 2.10). Remove them first
+    # since they're not needed for conversion or upload.
     print("  Installing litert-torch...")
     os.system("pip install -q litert-torch 'protobuf>=5.26,<7.0'")
+    os.system("pip uninstall -y torchvision torchaudio xformers -q 2>/dev/null")
 
     for config in variants:
         try:
