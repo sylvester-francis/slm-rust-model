@@ -21,7 +21,7 @@ import time
 
 # ── CONFIG ──────────────────────────────────────────────
 HF_USERNAME = "sylvester-francis"
-VARIANTS = ["1.7b", "4b"]
+VARIANTS = ["0.6b"]
 LITERT_QUANT = "dynamic_int8"     # dynamic_int8, dynamic_int4, fp16
 KV_CACHE_LEN = 2048
 # ────────────────────────────────────────────────────────
@@ -158,6 +158,8 @@ print(f"  ✅ Merged")
             f" --output_name_prefix={prefix}"
             f" --quantize={LITERT_QUANT}"
             f" --kv_cache_max_len={KV_CACHE_LEN}"
+            f" --gpu_dynamic_shapes=true"
+            f" --prefill_seq_lens=64,128,256,512"
         )
 
         # Step 4b: Bundle .tflite + tokenizer → .litertlm
