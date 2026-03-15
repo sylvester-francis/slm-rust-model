@@ -61,9 +61,11 @@ def main():
     print(f"   Source: HuggingFace ({HF_USERNAME})")
     print()
 
-    # ── STEP 1: Install merge deps (peft + transformers, needs torch 2.10) ──
+    # ── STEP 1: Install merge deps ──
+    # Reinstall torch + torchvision to ensure compatibility (litert-torch may have
+    # downgraded torch in a previous run). peft/transformers need working torchvision.
     print("📦 Installing merge dependencies...")
-    run("pip install -q peft transformers accelerate safetensors huggingface_hub")
+    run("pip install -q torch torchvision peft transformers accelerate safetensors huggingface_hub")
 
     # ── STEP 2: Download adapters from HF + merge into full-precision models ──
     for variant in VARIANTS:
@@ -73,18 +75,20 @@ def main():
         base_model = BASE_MODELS[variant]
 
         run_py(f"Download & merge {variant}", f"""
-import os, torch
-from huggingface_hub import snapshot_download
-from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import os
 
 adapter_dir = "{adapter_dir}"
 merged_dir = "{merged_dir}"
 
-# Skip if already merged
+# Skip if already merged — check BEFORE importing heavy deps
 if os.path.exists(os.path.join(merged_dir, "config.json")):
     print(f"  Already merged: {{merged_dir}}")
     exit(0)
+
+import torch
+from huggingface_hub import snapshot_download
+from peft import PeftModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Download adapter from HuggingFace
 print(f"  Downloading {adapter_repo}...")
