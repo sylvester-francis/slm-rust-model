@@ -860,15 +860,10 @@ def step_convert_litert():
     print(f"  Step 4/5: Converting {variant_names} to LiteRT")
     print("─" * 60)
 
-    # Install litert-torch without touching torch/protobuf (avoids breaking Unsloth + Google Cloud)
-    # litert-torch wants torch<2.10 but Colab has 2.10+; it works fine, just needs --no-deps
-    print("  Installing litert-torch (isolated)...")
-    os.system("pip install -q litert-torch --no-deps")
-    os.system(
-        "pip install -q ai-edge-litert-nightly ai-edge-quantizer-nightly"
-        " safetensors fire absl-py tabulate jaxtyping scipy kagglehub multipledispatch"
-        " 'protobuf>=5.26,<7.0'"
-    )
+    # Training is done by this point, so torch/xformers compatibility no longer matters.
+    # Install litert-torch normally and pin protobuf to keep HF upload working.
+    print("  Installing litert-torch...")
+    os.system("pip install -q litert-torch 'protobuf>=5.26,<7.0'")
 
     for config in variants:
         try:
