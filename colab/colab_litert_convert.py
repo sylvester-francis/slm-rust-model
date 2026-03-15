@@ -112,6 +112,11 @@ print(f"  Merging adapter...")
 model = PeftModel.from_pretrained(model, adapter_dir)
 model = model.merge_and_unload()
 
+# Untie lm_head so litert converter finds it as a separate weight
+model.config.tie_word_embeddings = False
+if model.lm_head.weight.data_ptr() == model.model.embed_tokens.weight.data_ptr():
+    model.lm_head.weight = torch.nn.Parameter(model.model.embed_tokens.weight.clone())
+
 # Save
 os.makedirs(merged_dir, exist_ok=True)
 print(f"  Saving merged model → {{merged_dir}}")
