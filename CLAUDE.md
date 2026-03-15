@@ -2,13 +2,18 @@
 
 ## Project Overview
 
-Fine-tuning pipeline for **RustMentor**, a Rust programming tutor model. Supports four variants:
+Fine-tuning pipeline for **RustMentor**, a Rust programming tutor model. Two generations:
+
+### Mobile-First (Gemma3, recommended)
+- **rust-mentor-1b-mobile** (Gemma3-1B-IT, ~650MB .litertlm) — full GPU on Pixel 8 Pro, Google AI Edge Gallery
+
+### Legacy (Qwen3, GGUF)
 - **8B** (Qwen3-8B, ~4.5GB GGUF) — highest quality, A100 required
 - **4B** (Qwen3-4B, ~2.5GB GGUF) — lighter, T4 compatible
-- **1.7B** (Qwen3-1.7B, ~1.1GB GGUF) — fast on-device chat, T4/free Colab
-- **0.6B** (Qwen3-0.6B, ~0.4GB GGUF) — ultra-light, instant mobile responses
+- **1.7B** (Qwen3-1.7B, ~1.1GB GGUF) — fast on-device chat
+- **0.6B** (Qwen3-0.6B, ~0.4GB GGUF) — ultra-light
 
-Uses QLoRA via Unsloth for efficient training. Target deployment: offline on Android (Pixel 8 Pro) via PocketPal AI or RustSensei app using GGUF format. The 1.7B and 0.6B variants are optimized for local chat and quick exercise debugging on mobile.
+Uses QLoRA via Unsloth for efficient training. Target deployment: offline on Android (Pixel 8 Pro) via Google AI Edge Gallery using .litertlm format (Gemma3) or PocketPal AI using GGUF format (Qwen3).
 
 ## Architecture
 
@@ -20,57 +25,45 @@ scripts/
   training.py                   → QLoRA fine-tuning with Unsloth + TRL SFTTrainer
   evaluation.py                 → Keyword-match evaluation on 5 Rust tutor prompts
   convert_gguf.py               → GGUF export via Unsloth (q4_k_m default)
-  convert_litert.py             → LiteRT (.tflite) export for Android GPU/NPU via litert-torch
+  convert_litert.py             → LiteRT (.tflite) export for Qwen3 models
+  bundle_litertlm.py            → Bundle .tflite + tokenizer → .litertlm for Google AI Edge Gallery
   upload_to_hf.py               → HuggingFace Hub upload with model card
   deploy_ollama.py              → Local Ollama deployment
 colab/
-  colab_train_and_upload.py     → Self-contained Colab pipeline (supports 8B, 4B, 1.7B, 0.6B, or combos)
+  colab_gemma3_pipeline.py      → Full Gemma3-1B pipeline: train → merge → convert → bundle → upload
+  colab_litert_convert.py       → Download from HF → merge → convert → bundle (Qwen3)
+  colab_bundle_only.py          → Download .tflite from HF → bundle .litertlm → upload
+  colab_train_and_upload.py     → Qwen3 training pipeline (legacy)
 ```
 
-## Key Commands
+## Gemma3 Mobile Pipeline (Recommended)
 
 ```bash
-python slm.py pipeline --variant 0.6b --username <hf-user>  # Full pipeline (0.6B)
-python slm.py train --variant 1.7b            # Train 1.7B mobile variant
-python slm.py train --variant 0.6b            # Train ultra-light 0.6B
-python slm.py collect                          # Generate synthetic data
-python slm.py preprocess                       # Merge datasets
-python slm.py train                            # QLoRA training (default 8B)
-python slm.py evaluate --variant 0.6b         # Evaluate 0.6B model
-python slm.py convert --variant 1.7b          # Export 1.7B to GGUF
-python slm.py convert-litert --variant 0.6b   # Export 0.6B to LiteRT (.tflite)
-python slm.py convert-litert --variant 1.7b --litert-quant dynamic_int4
-python slm.py upload --variant 0.6b --username <user> --gguf  # Upload to HF
+# Full pipeline in Colab:
+!python colab/colab_gemma3_pipeline.py
 ```
 
-## Training Configuration
+| Setting | Value |
+|---------|-------|
+| Base Model | `unsloth/gemma-3-1b-it` (Gemma license) |
+| LoRA r | 16 |
+| Batch Size | 2 × 4 = 8 effective |
+| Epochs | 3 |
+| LiteRT Quant | dynamic_int8 (~650MB) |
+| Stop Tokens | `[1, 106]` (`<eos>`, `<end_of_turn>`) |
+| GPU Delegation | Full on Tensor G3 (Mali-G715) |
+| Chat Template | `<start_of_turn>` / `<end_of_turn>` |
 
-| Variant | Base Model | LoRA r | Batch | Grad Accum | GGUF Size | GPU |
-|---------|-----------|--------|-------|------------|-----------|-----|
-| 8B | `unsloth/Qwen3-8B` | 32 | 2 | 4 | ~4.5GB | A100 |
-| 4B | `unsloth/Qwen3-4B` | 16 | 1 | 8 | ~2.5GB | T4 |
-| 1.7B | `unsloth/Qwen3-1.7B` | 16 | 2 | 4 | ~1.1GB | T4/free |
-| 0.6B | `unsloth/Qwen3-0.6B` | 8 | 4 | 2 | ~0.4GB | any |
+Pipeline: Train (Unsloth) → Merge (fp16) → Convert (.tflite via Gemma3 converter) → Bundle (.litertlm) → Upload to HF
 
-- **Shared**: 3 epochs, lr=2e-4, cosine scheduler, all attention + MLP projections
-- **Data**: ~500 synthetic (46 unique, rest duplicated) + ~3000 Strandset-Rust-v1 samples
-- **Format**: Qwen3 chat template (system/user/assistant turns)
-- **Hardware**: A100 40GB for 8B; T4 for 4B/1.7B; any GPU (including free Colab) for 0.6B
-- **Colab**: Set `TRAIN_VARIANTS = "mobile"` / `"0.6b"` / `"1.7b"` / `"all"` etc. in colab_train_and_upload.py
-- **CLI**: Use `--variant 0.6b` or `--variant 1.7b` with any slm.py command
+## Legacy Qwen3 Commands
 
-## Export Formats
-
-| Format | Engine | Android Accel | Use Case |
-|--------|--------|---------------|----------|
-| **GGUF** (q4_k_m) | llama.cpp | CPU | Ollama, PocketPal AI, llama.cpp |
-| **LiteRT** (.tflite) | litert-torch | GPU/NPU via NNAPI | RustSensei app, Google AI Edge |
-
-LiteRT conversion: QLoRA adapter → merge into base model → re-author as LiteRT model → export .tflite
-- Requires `litert-torch` package (formerly `ai-edge-torch`)
-- Built-in Qwen3 support for 0.6B, 1.7B, 4B; 8B uses custom config
-- Quantization: `dynamic_int8` (default), `dynamic_int4`, `fp16`
-- Needs ~32GB RAM for conversion (use Colab with high-RAM runtime)
+```bash
+python slm.py pipeline --variant 0.6b --username <hf-user>
+python slm.py train --variant 1.7b
+python slm.py convert --variant 0.6b           # GGUF
+python slm.py convert-litert --variant 0.6b    # LiteRT
+```
 
 ## Data Pipeline
 
@@ -80,11 +73,12 @@ LiteRT conversion: QLoRA adapter → merge into base model → re-author as Lite
 
 ## Dependencies
 
-torch, transformers, accelerate, peft, trl, bitsandbytes, datasets, unsloth, huggingface_hub, hf_transfer, sentencepiece, protobuf
+torch, transformers, accelerate, peft, trl, bitsandbytes, datasets, unsloth, huggingface_hub, hf_transfer, sentencepiece, protobuf, litert-torch
 
 ## Important Notes
 
+- Gemma3 requires accepting the license at huggingface.co/google/gemma-3-1b-it
+- Gemma license (not Apache 2.0) — free for commercial use, has Prohibited Use Policy
+- LiteRT converter only supports Gemma3 1B and 270M (no 4B)
 - The `slm.py` CLI imports from `scripts.*` — the `scripts/` directory with `__init__.py` must exist
-- Colab script imports from `scripts.*` as well — repo must be cloned with full structure
-- HF_TOKEN required for upload (via env var or Colab Secrets)
-- The tar.gz at project root contains the complete repo with proper directory structure
+- HF_TOKEN required for upload and Gemma model access
