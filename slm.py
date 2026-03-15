@@ -10,7 +10,8 @@ Usage:
     python slm.py collect           # Generate synthetic training data
     python slm.py train             # Train model with QLoRA
     python slm.py evaluate          # Evaluate model quality
-    python slm.py convert           # Export to GGUF for mobile
+    python slm.py convert           # Export to GGUF for mobile (llama.cpp)
+    python slm.py convert-litert    # Export to LiteRT for Android GPU/NPU
     python slm.py upload            # Upload to HuggingFace
     python slm.py deploy            # Deploy to Ollama
     python slm.py info              # Show system information
@@ -262,6 +263,30 @@ def cmd_convert(args):
     print(f"\n✅ GGUF exported → {output}")
 
 
+def cmd_convert_litert(args):
+    """Convert model to LiteRT (.tflite) format for Android GPU/NPU."""
+    from scripts.convert_litert import convert_to_litert
+
+    _apply_variant(args)
+    model_dir = args.model_dir or str(MODELS_DIR / "rust-mentor-8b")
+    quant = getattr(args, "litert_quant", "dynamic_int8") or "dynamic_int8"
+    variant = getattr(args, "variant", None)
+
+    print(f"\n🦀 Converting to LiteRT ({quant})")
+    print(f"   Model: {model_dir}")
+
+    output = convert_to_litert(
+        model_dir=model_dir,
+        variant=variant,
+        quantization=quant,
+        kv_cache_max_len=getattr(args, "max_length", DEFAULT_SEQ_LENGTH) or DEFAULT_SEQ_LENGTH,
+    )
+    if output:
+        print(f"\n✅ LiteRT exported → {output}")
+    else:
+        print(f"\n❌ LiteRT conversion failed")
+
+
 def cmd_upload(args):
     """Upload model to HuggingFace Hub."""
     from scripts.upload_to_hf import upload_model
@@ -302,15 +327,16 @@ def cmd_pipeline(args):
     print("=" * 50)
 
     steps = [
-        ("1/6", "Generating synthetic data", lambda: cmd_collect(args)),
-        ("2/6", "Preprocessing & merging", lambda: cmd_preprocess(args)),
-        ("3/6", "Training with QLoRA", lambda: cmd_train(args)),
-        ("4/6", "Evaluating model", lambda: cmd_evaluate(args)),
-        ("5/6", "Converting to GGUF", lambda: cmd_convert(args)),
+        ("1/7", "Generating synthetic data", lambda: cmd_collect(args)),
+        ("2/7", "Preprocessing & merging", lambda: cmd_preprocess(args)),
+        ("3/7", "Training with QLoRA", lambda: cmd_train(args)),
+        ("4/7", "Evaluating model", lambda: cmd_evaluate(args)),
+        ("5/7", "Converting to GGUF", lambda: cmd_convert(args)),
+        ("6/7", "Converting to LiteRT", lambda: cmd_convert_litert(args)),
     ]
 
     if args.username:
-        steps.append(("6/6", "Uploading to HuggingFace", lambda: cmd_upload(args)))
+        steps.append(("7/7", "Uploading to HuggingFace", lambda: cmd_upload(args)))
 
     for step_num, desc, func in steps:
         print(f"\n{'─' * 50}")
@@ -342,6 +368,8 @@ Examples:
   python slm.py train --variant 0.6b                  # Train ultra-light 0.6B
   python slm.py train --epochs 5 --lora-r 64          # Custom training
   python slm.py convert --variant 0.6b                # Export 0.6B to GGUF
+  python slm.py convert-litert --variant 0.6b          # Export 0.6B to LiteRT
+  python slm.py convert-litert --variant 1.7b --litert-quant dynamic_int4
   python slm.py upload --variant 1.7b --username u --gguf  # Upload GGUF
         """,
     )
@@ -385,6 +413,15 @@ Examples:
     p.add_argument("--variant", choices=list(VARIANT_CONFIGS), help="Preset: 8b, 4b, 1.7b, 0.6b")
     p.add_argument("--model-dir", type=str, help="Model directory")
     p.add_argument("--quant", default=DEFAULT_GGUF_QUANT, help="Quantization type")
+
+    # convert-litert
+    p = subparsers.add_parser("convert-litert", help="Convert to LiteRT (.tflite) for Android")
+    p.add_argument("--variant", choices=list(VARIANT_CONFIGS), help="Preset: 8b, 4b, 1.7b, 0.6b")
+    p.add_argument("--model-dir", type=str, help="Model directory")
+    p.add_argument("--litert-quant", default="dynamic_int8",
+                    choices=["dynamic_int8", "dynamic_int4", "fp16", "none"],
+                    help="LiteRT quantization (default: dynamic_int8)")
+    p.add_argument("--max-length", type=int, default=DEFAULT_SEQ_LENGTH, help="KV cache length")
 
     # upload
     p = subparsers.add_parser("upload", help="Upload to HuggingFace")
@@ -435,6 +472,7 @@ def main():
         "train": cmd_train,
         "evaluate": cmd_evaluate,
         "convert": cmd_convert,
+        "convert-litert": cmd_convert_litert,
         "upload": cmd_upload,
         "deploy": cmd_deploy,
         "pipeline": cmd_pipeline,

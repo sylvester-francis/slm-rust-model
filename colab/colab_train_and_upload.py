@@ -635,10 +635,51 @@ def step_upload_variant(config):
     print(f"  🔗 GGUF:  https://huggingface.co/{gguf_repo}")
 
 
-def step_upload():
-    """Step 4: Upload all variant(s) to HuggingFace."""
+def step_convert_litert_variant(config):
+    """Convert a single variant to LiteRT (.tflite) format."""
+    name = config["repo_name"]
+    variant = config["param_count"].lower()
+
+    print(f"\n  Converting {name} to LiteRT (.tflite)...")
+
+    from scripts.convert_litert import convert_to_litert
+
+    output = convert_to_litert(
+        model_dir=config["output_dir"],
+        variant=variant,
+        quantization="dynamic_int8",
+        kv_cache_max_len=MAX_SEQ_LENGTH,
+    )
+    if output:
+        print(f"  ✅ {name} LiteRT exported")
+    else:
+        print(f"  ⚠️  {name} LiteRT conversion failed (GGUF still available)")
+
+
+def step_convert_litert():
+    """Step 4: Convert all variants to LiteRT format."""
+    variants = _get_variants()
+    variant_names = " + ".join(c["repo_name"] for c in variants)
     print("\n" + "─" * 60)
-    print("  Step 4/4: Uploading to HuggingFace")
+    print(f"  Step 4/5: Converting {variant_names} to LiteRT")
+    print("─" * 60)
+
+    # Install litert-torch if needed
+    print("  Installing litert-torch...")
+    os.system("pip install -q litert-torch")
+
+    for config in variants:
+        try:
+            step_convert_litert_variant(config)
+        except Exception as e:
+            print(f"  ⚠️  LiteRT conversion failed for {config['repo_name']}: {e}")
+            print(f"      GGUF export will still be available in the upload step.")
+
+
+def step_upload():
+    """Step 5: Upload all variant(s) to HuggingFace."""
+    print("\n" + "─" * 60)
+    print("  Step 5/5: Uploading to HuggingFace")
     print("─" * 60)
 
     if not HF_USERNAME:
@@ -660,6 +701,7 @@ def main():
         ("Generate data", step_generate_data),
         ("Preprocess", step_preprocess),
         ("Train", step_train),
+        ("Convert LiteRT", step_convert_litert),
         ("Upload + GGUF", step_upload),
     ]
 

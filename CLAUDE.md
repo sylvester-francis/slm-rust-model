@@ -20,6 +20,7 @@ scripts/
   training.py                   → QLoRA fine-tuning with Unsloth + TRL SFTTrainer
   evaluation.py                 → Keyword-match evaluation on 5 Rust tutor prompts
   convert_gguf.py               → GGUF export via Unsloth (q4_k_m default)
+  convert_litert.py             → LiteRT (.tflite) export for Android GPU/NPU via litert-torch
   upload_to_hf.py               → HuggingFace Hub upload with model card
   deploy_ollama.py              → Local Ollama deployment
 colab/
@@ -37,6 +38,8 @@ python slm.py preprocess                       # Merge datasets
 python slm.py train                            # QLoRA training (default 8B)
 python slm.py evaluate --variant 0.6b         # Evaluate 0.6B model
 python slm.py convert --variant 1.7b          # Export 1.7B to GGUF
+python slm.py convert-litert --variant 0.6b   # Export 0.6B to LiteRT (.tflite)
+python slm.py convert-litert --variant 1.7b --litert-quant dynamic_int4
 python slm.py upload --variant 0.6b --username <user> --gguf  # Upload to HF
 ```
 
@@ -55,6 +58,19 @@ python slm.py upload --variant 0.6b --username <user> --gguf  # Upload to HF
 - **Hardware**: A100 40GB for 8B; T4 for 4B/1.7B; any GPU (including free Colab) for 0.6B
 - **Colab**: Set `TRAIN_VARIANTS = "mobile"` / `"0.6b"` / `"1.7b"` / `"all"` etc. in colab_train_and_upload.py
 - **CLI**: Use `--variant 0.6b` or `--variant 1.7b` with any slm.py command
+
+## Export Formats
+
+| Format | Engine | Android Accel | Use Case |
+|--------|--------|---------------|----------|
+| **GGUF** (q4_k_m) | llama.cpp | CPU | Ollama, PocketPal AI, llama.cpp |
+| **LiteRT** (.tflite) | litert-torch | GPU/NPU via NNAPI | RustSensei app, Google AI Edge |
+
+LiteRT conversion: QLoRA adapter → merge into base model → re-author as LiteRT model → export .tflite
+- Requires `litert-torch` package (formerly `ai-edge-torch`)
+- Built-in Qwen3 support for 0.6B, 1.7B, 4B; 8B uses custom config
+- Quantization: `dynamic_int8` (default), `dynamic_int4`, `fp16`
+- Needs ~32GB RAM for conversion (use Colab with high-RAM runtime)
 
 ## Data Pipeline
 
