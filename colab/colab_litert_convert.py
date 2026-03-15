@@ -21,7 +21,7 @@ import time
 
 # ── CONFIG ──────────────────────────────────────────────
 HF_USERNAME = "sylvester-francis"
-VARIANTS = ["0.6b", "1.7b"]
+VARIANTS = ["0.6b", "1.7b", "4b", "8b"]
 LITERT_QUANT = "dynamic_int8"     # dynamic_int8, dynamic_int4, fp16
 KV_CACHE_LEN = 2048
 # ────────────────────────────────────────────────────────
@@ -124,6 +124,9 @@ print(f"  ✅ Merged")
     run("pip install -q litert-torch 'protobuf>=5.26,<7.0' 'torchao<0.16,>=0.10'")
 
     # ── STEP 4: Convert to LiteRT using Google's official CLI ──
+    # Built-in CLI supports 0.6b, 1.7b, 4b. 8b needs custom script.
+    BUILTIN_SIZES = ["0.6b", "1.7b", "4b"]
+
     for variant in VARIANTS:
         merged_dir = f"models/rust-mentor-{variant}-litert/merged"
         output_dir = f"models/rust-mentor-{variant}-litert"
@@ -133,15 +136,30 @@ print(f"  ✅ Merged")
         print(f"  Convert {variant} to LiteRT")
         print(f"{'=' * 60}\n")
 
-        run(
-            f"python -m litert_torch.generative.examples.qwen.convert_v3_to_tflite"
-            f" --model_size={variant}"
-            f" --checkpoint_path={merged_dir}"
-            f" --output_path={output_dir}"
-            f" --output_name_prefix={prefix}"
-            f" --quantize={LITERT_QUANT}"
-            f" --kv_cache_max_len={KV_CACHE_LEN}"
-        )
+        if variant in BUILTIN_SIZES:
+            run(
+                f"python -m litert_torch.generative.examples.qwen.convert_v3_to_tflite"
+                f" --model_size={variant}"
+                f" --checkpoint_path={merged_dir}"
+                f" --output_path={output_dir}"
+                f" --output_name_prefix={prefix}"
+                f" --quantize={LITERT_QUANT}"
+                f" --kv_cache_max_len={KV_CACHE_LEN}"
+            )
+        else:
+            # 8B: use custom conversion via convert_litert.py
+            run_py(f"Convert {variant} (custom)", f"""
+import sys, os
+sys.path.insert(0, os.getcwd())
+from scripts.convert_litert import _convert_8b_custom
+
+_convert_8b_custom(
+    merged_dir="{merged_dir}",
+    output_dir="{output_dir}",
+    quant="{LITERT_QUANT}",
+    kv_cache_max_len={KV_CACHE_LEN},
+)
+""")
 
     # ── STEP 5: Upload LiteRT to HuggingFace ──
     upload_parts = []
