@@ -21,7 +21,7 @@ import time
 
 # ── CONFIG ──────────────────────────────────────────────
 HF_USERNAME = "sylvester-francis"
-VARIANTS = ["0.6b", "1.7b", "4b", "8b"]
+VARIANTS = ["0.6b", "1.7b"]
 LITERT_QUANT = "dynamic_int8"     # dynamic_int8, dynamic_int4, fp16
 KV_CACHE_LEN = 2048
 # ────────────────────────────────────────────────────────
