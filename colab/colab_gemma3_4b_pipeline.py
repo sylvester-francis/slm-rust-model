@@ -1124,18 +1124,26 @@ def main():
     # Seed examples are duplicated to reach the target count
     # (in production, use augmentation or a larger seed set).
 
+    # Write seeds to a temp JSON file so the subprocess can load them
+    # without repr/eval escaping issues.
+    import json as _json
+    seeds_json_path = "data/processed/_seeds_tmp.json"
+    os.makedirs("data/processed", exist_ok=True)
+    with open(seeds_json_path, "w") as _f:
+        _json.dump({
+            "seeds": SEED_CONVERSATIONS,
+            "system_prompt": SYSTEM_PROMPT,
+        }, _f)
+
     run_py("Build Training Dataset", f"""
 import json
 import os
 
-# ── Seed data embedded from pipeline config ──
-SYSTEM_PROMPT = {SYSTEM_PROMPT!r}
-REFUSAL_RESPONSE = {REFUSAL_RESPONSE!r}
-
-# Load seed conversations from the pipeline's constant
-# (passed via string interpolation to keep the script self-contained)
-import ast
-SEEDS = ast.literal_eval('''{SEED_CONVERSATIONS!r}''')
+# ── Load seed data from temp JSON (avoids repr/eval escaping issues) ──
+with open("{seeds_json_path}") as f:
+    raw = json.load(f)
+SEEDS = raw["seeds"]
+SYSTEM_PROMPT = raw["system_prompt"]
 
 # ── Format each conversation with the Gemma 3 chat template ──
 # Gemma 3 uses: <start_of_turn>role\\ncontent<end_of_turn>
@@ -1164,6 +1172,9 @@ os.makedirs(os.path.dirname(output_path), exist_ok=True)
 with open(output_path, "w") as f:
     for sample in dataset:
         f.write(json.dumps(sample) + "\\n")
+
+# Clean up temp file
+os.remove("{seeds_json_path}")
 
 # Report distribution
 categories = {{}}
