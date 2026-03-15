@@ -133,43 +133,28 @@ print(f"  ✅ Merged")
     run("pip install -q litert-torch 'protobuf>=5.26,<7.0'")
     run("pip install -q 'torchao==0.11.0' --force-reinstall --no-deps")
 
-    # ── STEP 4: Convert to LiteRT using Google's official CLI ──
-    # Built-in CLI supports 0.6b, 1.7b, 4b. 8b needs custom script.
+    # ── STEP 4: Convert to .litertlm format (for Google AI Edge Gallery) ──
     BUILTIN_SIZES = ["0.6b", "1.7b", "4b"]
 
     for variant in VARIANTS:
         merged_dir = f"models/rust-mentor-{variant}-litert/merged"
         output_dir = f"models/rust-mentor-{variant}-litert"
-        prefix = f"rust_mentor_{variant.replace('.', '_')}"
 
         print(f"\n{'=' * 60}")
-        print(f"  Convert {variant} to LiteRT")
+        print(f"  Convert {variant} to .litertlm")
         print(f"{'=' * 60}\n")
 
         if variant in BUILTIN_SIZES:
             run(
-                f"python -m litert_torch.generative.examples.qwen.convert_v3_to_tflite"
-                f" --model_size={variant}"
-                f" --checkpoint_path={merged_dir}"
-                f" --output_path={output_dir}"
-                f" --output_name_prefix={prefix}"
+                f"python scripts/convert_litert_lm.py"
+                f" --variant={variant}"
+                f" --checkpoint={merged_dir}"
+                f" --output={output_dir}"
                 f" --quantize={LITERT_QUANT}"
                 f" --kv_cache_max_len={KV_CACHE_LEN}"
             )
         else:
-            # 8B: use custom conversion via convert_litert.py
-            run_py(f"Convert {variant} (custom)", f"""
-import sys, os
-sys.path.insert(0, os.getcwd())
-from scripts.convert_litert import _convert_8b_custom
-
-_convert_8b_custom(
-    merged_dir="{merged_dir}",
-    output_dir="{output_dir}",
-    quant="{LITERT_QUANT}",
-    kv_cache_max_len={KV_CACHE_LEN},
-)
-""")
+            print(f"  ⚠️  {variant} not yet supported for .litertlm, skipping")
 
     # ── STEP 5: Upload LiteRT to HuggingFace ──
     upload_parts = []
@@ -179,11 +164,12 @@ litert_dir = "models/rust-mentor-{variant}-litert"
 repo_id = f"{{username}}/rust-mentor-{variant}-LiteRT"
 print(f"\\nUploading {{litert_dir}} → {{repo_id}}")
 create_repo(repo_id, token=token, exist_ok=True, repo_type="model")
-# Upload only .tflite files and tokenizer, skip the huge merged/ dir
+# Upload .tflite and .litertlm files, skip the huge merged/ dir
 import glob
-for f in glob.glob(os.path.join(litert_dir, "*.tflite")):
-    print(f"  Uploading {{os.path.basename(f)}}")
-    api.upload_file(path_or_fileobj=f, path_in_repo=os.path.basename(f), repo_id=repo_id, token=token)
+for ext in ["*.tflite", "*.litertlm"]:
+    for f in glob.glob(os.path.join(litert_dir, ext)):
+        print(f"  Uploading {{os.path.basename(f)}}")
+        api.upload_file(path_or_fileobj=f, path_in_repo=os.path.basename(f), repo_id=repo_id, token=token)
 print(f"✅ https://huggingface.co/{{repo_id}}")
 """)
 
