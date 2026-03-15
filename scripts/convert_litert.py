@@ -82,15 +82,17 @@ def merge_adapter(adapter_dir: str, output_dir: str, base_model: str = None) -> 
     Returns:
         Path to the merged model directory.
     """
-    import json
-    import torch
-    from peft import PeftModel, PeftConfig
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
+    # Check for existing merged checkpoint BEFORE importing transformers/peft
+    # (those imports fail if torch/torchvision versions are mismatched)
     merged_dir = os.path.join(output_dir, "merged")
     if os.path.exists(merged_dir) and os.path.exists(os.path.join(merged_dir, "config.json")):
         print(f"    Using existing merged checkpoint: {merged_dir}")
         return merged_dir
+
+    import json
+    import torch
+    from peft import PeftModel, PeftConfig
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     os.makedirs(merged_dir, exist_ok=True)
 
