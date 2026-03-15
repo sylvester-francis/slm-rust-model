@@ -565,6 +565,176 @@ Apache 2.0 for the fine-tuned model; base model ({base_model_name}) license also
 """
 
 
+LITERT_MODEL_CARD = """---
+license: apache-2.0
+language:
+- en
+tags:
+- rust
+- programming
+- tutor
+- code-review
+- code-generation
+- qlora
+- unsloth
+- litert
+- tflite
+- on-device
+- android
+base_model: {base_model_name}
+datasets:
+- Fortytwo-Network/Strandset-Rust-v1
+pipeline_tag: text-generation
+---
+
+# RustMentor-{param_count}-LiteRT
+
+RustMentor-{param_count}-LiteRT is a {param_count}-parameter Qwen3-based model fine-tuned for Rust programming education and code review. This repository hosts the **LiteRT (.tflite)** format for on-device Android inference with GPU/NPU acceleration.
+
+For the LoRA adapter, see [rust-mentor-{param_count_lower}](https://huggingface.co/{username}/rust-mentor-{param_count_lower}). For GGUF (llama.cpp/Ollama), see [rust-mentor-{param_count_lower}-GGUF](https://huggingface.co/{username}/rust-mentor-{param_count_lower}-GGUF).
+
+## Model Description
+
+- **Base Model**: {base_model_name}
+- **Model Type**: Causal LM (code tutoring + review)
+- **Parameters**: {param_count}
+- **Context Length**: 2048 tokens
+- **Fine-tuning**: QLoRA (r={lora_r}, alpha={lora_r}) with Unsloth optimization
+- **Format**: LiteRT .tflite (dynamic INT8 quantization)
+- **License**: Apache 2.0
+- **Language**: English, Rust code
+
+## Why LiteRT?
+
+LiteRT (formerly TFLite) is Google's on-device ML framework. Compared to GGUF/llama.cpp:
+
+- **GPU/NPU acceleration** via NNAPI on Android (Tensor G3, Snapdragon, etc.)
+- **2-3x faster inference** on Pixel 8 Pro vs CPU-only GGUF
+- **Native Android SDK** — no JNI wrapper needed
+- **KV cache optimized** for mobile memory constraints
+
+## What It Is Good At
+
+- Explaining Rust ownership, borrowing, and lifetimes with Go/Python/TS comparisons
+- Code review with borrow checker explanations
+- Error handling patterns (Result, Option, ?, thiserror, anyhow)
+- Async/await and Tokio patterns
+- Smart pointers (Box, Rc, Arc, RefCell)
+- Pattern matching and enum-based design
+- Trait-based architecture and generics
+- Type conversions (From, Into, AsRef, Deref)
+- Serde & JSON serialization
+- CLI tooling with clap
+- Cargo project structure, modules, and workspaces
+- Testing patterns and documentation
+
+## Intended Uses
+
+**Primary**: Offline Rust programming tutor on Android (Pixel 8 Pro tested) via RustSensei app or Google AI Edge Gallery, with GPU/NPU-accelerated on-device inference.
+
+**Out-of-scope**: General-purpose chat, non-Rust programming, safety-sensitive or factual tasks outside Rust development.
+
+## Prompt Examples
+
+```
+"In Go, I just pass values or pointers. What's this ownership thing in Rust?"
+
+"Review this Rust code and explain what the borrow checker is doing:\\n\\nfn get_longest(a: String, b: String) -> String {{\\n    if a.len() > b.len() {{ a }} else {{ b }}\\n}}"
+
+"How do I handle errors in Rust? I'm used to Go's if err != nil pattern."
+
+"How does async work in Rust? In Go I just use goroutines and it's simple."
+```
+
+## How to Use
+
+### Google AI Edge Gallery (Android)
+
+1. Install [Google AI Edge Gallery](https://play.google.com/store/apps/details?id=com.google.ai.edge.gallery) from Play Store
+2. Import the .tflite model from this repo
+3. Chat offline with GPU/NPU acceleration
+
+### LiteRT-LM (Programmatic — Android/Kotlin)
+
+```kotlin
+// Add to build.gradle.kts:
+// implementation("com.google.ai.edge:litert-lm:latest")
+
+import com.google.ai.edge.litert.lm.LlmInference
+
+val options = LlmInference.Options.builder()
+    .setModelPath("/path/to/rust_mentor_{param_count_lower}.tflite")
+    .setMaxTokens(512)
+    .setTemperature(0.7f)
+    .setTopP(0.9f)
+    .build()
+
+val llm = LlmInference.createFromOptions(context, options)
+val response = llm.generateResponse("Explain Rust's ownership model to a Go developer")
+```
+
+### MediaPipe LLM Inference (Alternative)
+
+```python
+import mediapipe as mp
+
+model_path = "rust_mentor_{param_count_lower}_q8_ekv2048.tflite"
+llm = mp.tasks.genai.LlmInference.create_from_options(
+    mp.tasks.genai.LlmInferenceOptions(model_path=model_path, max_tokens=512)
+)
+response = llm.generate_response("How do I handle errors in Rust?")
+```
+
+## Training Data (Summary)
+
+- **Strandset-Rust-v1**: 3,000 samples of Rust code generation, review, refactoring, and bug detection tasks
+- **Synthetic tutor conversations**: 46 unique hand-crafted Rust tutoring dialogues across 28 topics, covering ownership, error handling, traits, async, smart pointers, macros, serde, testing, and more
+- **Style**: All conversations draw parallels to Go/Python/TypeScript equivalents
+
+## Training Configuration (QLoRA)
+
+| Parameter | Value |
+|-----------|-------|
+| Base Model | {base_model_name} |
+| Method | QLoRA via Unsloth |
+| LoRA Rank (r) | {lora_r} |
+| LoRA Alpha | {lora_r} |
+| Target Modules | q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj |
+| Epochs | 3 |
+| Batch Size | {batch_size} x {grad_accum} (effective {effective_batch}) |
+| Learning Rate | 2e-4 (cosine schedule) |
+| Max Sequence Length | 2048 |
+| Hardware | NVIDIA A100 40GB (Google Colab) |
+
+## Export Configuration (LiteRT)
+
+| Parameter | Value |
+|-----------|-------|
+| Conversion Tool | litert-torch (re-authored Qwen3) |
+| Quantization | Dynamic INT8 |
+| KV Cache Length | 2048 |
+| Prefill Lengths | 8, 64, 128, 256, 512, 1024 |
+| Output Format | .tflite (TFLite Flatbuffers) |
+
+## Safety & Limitations
+
+- May generate incorrect code or hallucinate crate APIs — review before production use.
+- Not a replacement for the Rust compiler or clippy — always compile and test generated code.
+- Optimized for tutoring, not production code generation at scale.
+- Training data focuses on CLI/systems patterns; web framework coverage (Axum, Actix) is limited.
+
+## License
+
+Apache 2.0 for the fine-tuned model; base model ({base_model_name}) license also applies.
+
+## Contact
+
+- **Maintainer**: Sylvester Francis ([@sylvester-francis](https://huggingface.co/{username}))
+- **Repository**: [github.com/sylvester-francis/slm-rust-model](https://github.com/sylvester-francis/slm-rust-model)
+- **Issues/feedback**: Open a discussion on the model repo
+"""
+
+
 def upload_model_card(repo_id, token, card_template, config, username):
     """Upload a model card README.md to a HuggingFace repo."""
     from huggingface_hub import HfApi
@@ -654,7 +824,8 @@ def step_upload_variant(config):
                 repo_id=litert_repo,
                 token=token,
             )
-            print(f"  ✅ {name} LiteRT pushed")
+            upload_model_card(litert_repo, token, LITERT_MODEL_CARD, config, HF_USERNAME)
+            print(f"  ✅ {name} LiteRT + model card pushed")
             print(f"  🔗 LiteRT: https://huggingface.co/{litert_repo}")
         else:
             print(f"  ⚠️  No LiteRT output at {litert_dir} — run convert step first")
