@@ -296,7 +296,17 @@ def cmd_upload(args):
     variant = getattr(args, "variant", None) or "8b"
     repo = f"{args.username}/rust-mentor-{variant}"
 
-    if args.gguf:
+    if args.litert:
+        repo += "-LiteRT"
+        # Point to the litert output directory
+        litert_dir = model_dir + "-litert"
+        if os.path.exists(litert_dir):
+            model_dir = litert_dir
+        else:
+            print(f"  ⚠️  LiteRT directory not found: {litert_dir}")
+            print(f"     Run `python slm.py convert-litert --variant {variant}` first.")
+            return
+    elif args.gguf:
         repo += "-GGUF"
 
     print(f"\n🦀 Uploading to HuggingFace: {repo}")
@@ -429,6 +439,7 @@ Examples:
     p.add_argument("--username", required=True, help="HF username")
     p.add_argument("--model-dir", type=str, help="Model directory")
     p.add_argument("--gguf", action="store_true", help="Upload GGUF version")
+    p.add_argument("--litert", action="store_true", help="Upload LiteRT (.tflite) version")
 
     # deploy
     p = subparsers.add_parser("deploy", help="Deploy to Ollama")

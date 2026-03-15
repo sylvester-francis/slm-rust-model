@@ -631,8 +631,30 @@ def step_upload_variant(config):
     upload_model_card(gguf_repo, token, GGUF_MODEL_CARD, config, HF_USERNAME)
     print(f"  ✅ {name} GGUF + model card pushed")
 
-    print(f"  🔗 Model: https://huggingface.co/{repo_id}")
-    print(f"  🔗 GGUF:  https://huggingface.co/{gguf_repo}")
+    # Upload LiteRT if available
+    litert_dir = config["output_dir"] + "-litert"
+    if os.path.exists(litert_dir):
+        from huggingface_hub import HfApi
+        litert_repo = f"{HF_USERNAME}/{name}-LiteRT"
+        print(f"  Uploading LiteRT → {litert_repo}")
+        try:
+            create_repo(litert_repo, token=token, exist_ok=True, repo_type="model")
+        except Exception:
+            pass
+        api = HfApi(token=token)
+        api.upload_folder(
+            folder_path=litert_dir,
+            repo_id=litert_repo,
+            token=token,
+        )
+        print(f"  ✅ {name} LiteRT pushed")
+    else:
+        print(f"  ⏭️  No LiteRT output found at {litert_dir}, skipping LiteRT upload")
+
+    print(f"  🔗 Model:  https://huggingface.co/{repo_id}")
+    print(f"  🔗 GGUF:   https://huggingface.co/{gguf_repo}")
+    if os.path.exists(litert_dir):
+        print(f"  🔗 LiteRT: https://huggingface.co/{litert_repo}")
 
 
 def step_convert_litert_variant(config):
