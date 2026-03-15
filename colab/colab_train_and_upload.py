@@ -860,12 +860,11 @@ def step_convert_litert():
     print(f"  Step 4/5: Converting {variant_names} to LiteRT")
     print("─" * 60)
 
-    # Training is done by this point. litert-torch downgrades torch to 2.9.x which
-    # breaks torchvision/torchaudio/xformers (compiled for 2.10). Remove them first
-    # since they're not needed for conversion or upload.
+    # Training is done by this point. Install litert-torch with torchvision together
+    # so pip resolves compatible torch/torchvision versions (litert downgrades torch
+    # to 2.9.x, so torchvision must match). transformers needs torchvision to import.
     print("  Installing litert-torch...")
-    os.system("pip install -q litert-torch 'protobuf>=5.26,<7.0'")
-    os.system("pip uninstall -y torchvision torchaudio xformers -q 2>/dev/null")
+    os.system("pip install -q litert-torch torchvision 'protobuf>=5.26,<7.0'")
 
     for config in variants:
         try:
