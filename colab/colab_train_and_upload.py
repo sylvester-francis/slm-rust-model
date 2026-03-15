@@ -889,8 +889,10 @@ def step_convert_litert():
     print(f"  Step 4/5: Converting {variant_names} to LiteRT")
     print("─" * 60)
 
-    # Safe to install now — training and merging are done, torch downgrade is fine
+    # Safe to install now — training and merging are done, torch downgrade is fine.
+    # Must remove Colab's tensorflow first — its ABI is incompatible with litert-torch.
     print("  Installing litert-torch...")
+    os.system("pip uninstall -y tensorflow tensorflow-cpu keras -q 2>/dev/null")
     os.system("pip install -q litert-torch 'protobuf>=5.26,<7.0'")
 
     for config in variants:

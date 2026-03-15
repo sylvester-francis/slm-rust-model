@@ -144,11 +144,14 @@ merge_adapter(
 )
 """)
 
-    # ── STAGE 4: Install litert-torch (torch downgrade happens here) ──
+    # ── STAGE 4: Install litert-torch (torch downgrade + TF replacement happens here) ──
     if EXPORT in ("litert", "both"):
         print(f"\n{'=' * 60}")
         print(f"  STAGE: Install litert-torch")
         print(f"{'=' * 60}\n")
+        # Colab's tensorflow 2.19 has ABI mismatch with litert-torch's ai-edge-tensorflow.
+        # Remove it so litert-torch can install its own compatible version.
+        run_shell("pip uninstall -y tensorflow tensorflow-cpu keras -q 2>/dev/null || true")
         run_shell("pip install -q litert-torch 'protobuf>=5.26,<7.0'")
         print("  ✅ litert-torch installed")
 
