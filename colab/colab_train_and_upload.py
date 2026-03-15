@@ -102,7 +102,9 @@ SYNTHETIC_SAMPLES = 500
 STRANDSET_SAMPLES = 3000
 
 # Export
+EXPORT_FORMATS = "litert"  # "both" = GGUF + LiteRT, "gguf" = GGUF only, "litert" = LiteRT only
 GGUF_QUANT = "q4_k_m"  # q4_k_m for mobile, q5_k_m for higher quality
+LITERT_QUANT = "dynamic_int8"  # dynamic_int8, dynamic_int4, fp16
 
 # HuggingFace
 HF_USERNAME = ""  # Set below from secrets or manually
@@ -587,12 +589,14 @@ def upload_model_card(repo_id, token, card_template, config, username):
 
 
 def step_upload_variant(config):
-    """Upload a single variant's adapter + GGUF to HuggingFace."""
+    """Upload a single variant's adapter + exports to HuggingFace."""
     from unsloth import FastLanguageModel
-    from huggingface_hub import create_repo
+    from huggingface_hub import create_repo, HfApi
 
     token = os.environ.get("HF_TOKEN", "")
     name = config["repo_name"]
+    do_gguf = EXPORT_FORMATS in ("gguf", "both")
+    do_litert = EXPORT_FORMATS in ("litert", "both")
 
     # Load the trained model
     print(f"\n  Loading trained model ({name})...")
@@ -614,47 +618,46 @@ def step_upload_variant(config):
     tokenizer.push_to_hub(repo_id, token=token)
     upload_model_card(repo_id, token, ADAPTER_MODEL_CARD, config, HF_USERNAME)
     print(f"  ✅ {name} adapter + model card uploaded")
+    print(f"  🔗 Adapter: https://huggingface.co/{repo_id}")
 
     # Push GGUF directly to HF
-    gguf_repo = f"{HF_USERNAME}/{name}-GGUF"
-    print(f"  Pushing GGUF directly → {gguf_repo} (skips local save)")
-    try:
-        create_repo(gguf_repo, token=token, exist_ok=True, repo_type="model")
-    except Exception:
-        pass
-    model.push_to_hub_gguf(
-        gguf_repo,
-        tokenizer,
-        quantization_method=GGUF_QUANT,
-        token=token,
-    )
-    upload_model_card(gguf_repo, token, GGUF_MODEL_CARD, config, HF_USERNAME)
-    print(f"  ✅ {name} GGUF + model card pushed")
-
-    # Upload LiteRT if available
-    litert_dir = config["output_dir"] + "-litert"
-    if os.path.exists(litert_dir):
-        from huggingface_hub import HfApi
-        litert_repo = f"{HF_USERNAME}/{name}-LiteRT"
-        print(f"  Uploading LiteRT → {litert_repo}")
+    if do_gguf:
+        gguf_repo = f"{HF_USERNAME}/{name}-GGUF"
+        print(f"  Pushing GGUF directly → {gguf_repo} (skips local save)")
         try:
-            create_repo(litert_repo, token=token, exist_ok=True, repo_type="model")
+            create_repo(gguf_repo, token=token, exist_ok=True, repo_type="model")
         except Exception:
             pass
-        api = HfApi(token=token)
-        api.upload_folder(
-            folder_path=litert_dir,
-            repo_id=litert_repo,
+        model.push_to_hub_gguf(
+            gguf_repo,
+            tokenizer,
+            quantization_method=GGUF_QUANT,
             token=token,
         )
-        print(f"  ✅ {name} LiteRT pushed")
-    else:
-        print(f"  ⏭️  No LiteRT output found at {litert_dir}, skipping LiteRT upload")
+        upload_model_card(gguf_repo, token, GGUF_MODEL_CARD, config, HF_USERNAME)
+        print(f"  ✅ {name} GGUF pushed")
+        print(f"  🔗 GGUF:   https://huggingface.co/{gguf_repo}")
 
-    print(f"  🔗 Model:  https://huggingface.co/{repo_id}")
-    print(f"  🔗 GGUF:   https://huggingface.co/{gguf_repo}")
-    if os.path.exists(litert_dir):
-        print(f"  🔗 LiteRT: https://huggingface.co/{litert_repo}")
+    # Upload LiteRT if available
+    if do_litert:
+        litert_dir = config["output_dir"] + "-litert"
+        if os.path.exists(litert_dir):
+            litert_repo = f"{HF_USERNAME}/{name}-LiteRT"
+            print(f"  Uploading LiteRT → {litert_repo}")
+            try:
+                create_repo(litert_repo, token=token, exist_ok=True, repo_type="model")
+            except Exception:
+                pass
+            api = HfApi(token=token)
+            api.upload_folder(
+                folder_path=litert_dir,
+                repo_id=litert_repo,
+                token=token,
+            )
+            print(f"  ✅ {name} LiteRT pushed")
+            print(f"  🔗 LiteRT: https://huggingface.co/{litert_repo}")
+        else:
+            print(f"  ⚠️  No LiteRT output at {litert_dir} — run convert step first")
 
 
 def step_convert_litert_variant(config):
@@ -723,9 +726,10 @@ def main():
         ("Generate data", step_generate_data),
         ("Preprocess", step_preprocess),
         ("Train", step_train),
-        ("Convert LiteRT", step_convert_litert),
-        ("Upload + GGUF", step_upload),
     ]
+    if EXPORT_FORMATS in ("litert", "both"):
+        steps.append(("Convert LiteRT", step_convert_litert))
+    steps.append(("Upload", step_upload))
 
     timings = {}
     for name, func in steps:
