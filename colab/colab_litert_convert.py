@@ -125,7 +125,8 @@ print(f"  ✅ Merged")
     print(f"  Install litert-torch")
     print(f"{'=' * 60}\n")
     run("pip uninstall -y tensorflow tensorflow-cpu keras -q 2>/dev/null || true")
-    run("pip install -q litert-torch 'protobuf>=5.26,<7.0' 'torchao<0.16,>=0.10'")
+    run("pip install -q litert-torch 'protobuf>=5.26,<7.0'")
+    run("pip install -q 'torchao==0.11.0' --force-reinstall --no-deps")
 
     # ── STEP 4: Convert to LiteRT using Google's official CLI ──
     # Built-in CLI supports 0.6b, 1.7b, 4b. 8b needs custom script.
