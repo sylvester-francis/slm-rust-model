@@ -40,7 +40,6 @@ def main():
     print(f"Building Qwen3-{args.variant} model from {args.checkpoint}...")
     pytorch_model = builders[args.variant](
         checkpoint_path=args.checkpoint,
-        kv_cache_max_len=args.kv_cache_max_len,
     )
 
     # Find tokenizer in the checkpoint dir
