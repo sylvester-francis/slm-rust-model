@@ -831,8 +831,33 @@ def step_upload_variant(config):
             print(f"  ⚠️  No LiteRT output at {litert_dir} — run convert step first")
 
 
+def step_merge_adapters():
+    """Step 3.5: Merge QLoRA adapters into base models (while torch ecosystem is intact).
+
+    Must run BEFORE litert-torch is installed, because litert-torch downgrades
+    torch from 2.10→2.9 which breaks torchvision and transformers imports.
+    """
+    variants = _get_variants()
+    variant_names = " + ".join(c["repo_name"] for c in variants)
+    print("\n" + "─" * 60)
+    print(f"  Step 3.5: Merging adapters for {variant_names}")
+    print("─" * 60)
+
+    from scripts.convert_litert import merge_adapter
+
+    for config in variants:
+        name = config["repo_name"]
+        output_dir = config["output_dir"] + "-litert"
+        print(f"\n  Merging {name}...")
+        try:
+            merged_dir = merge_adapter(config["output_dir"], output_dir)
+            print(f"  ✅ {name} merged → {merged_dir}")
+        except Exception as e:
+            print(f"  ⚠️  Merge failed for {name}: {e}")
+
+
 def step_convert_litert_variant(config):
-    """Convert a single variant to LiteRT (.tflite) format."""
+    """Convert a single variant's merged checkpoint to LiteRT (.tflite)."""
     name = config["repo_name"]
     variant = config["param_count"].lower()
 
@@ -843,35 +868,38 @@ def step_convert_litert_variant(config):
     output = convert_to_litert(
         model_dir=config["output_dir"],
         variant=variant,
-        quantization="dynamic_int8",
+        quantization=LITERT_QUANT,
         kv_cache_max_len=MAX_SEQ_LENGTH,
     )
     if output:
         print(f"  ✅ {name} LiteRT exported")
     else:
-        print(f"  ⚠️  {name} LiteRT conversion failed (GGUF still available)")
+        print(f"  ⚠️  {name} LiteRT conversion failed")
 
 
 def step_convert_litert():
-    """Step 4: Convert all variants to LiteRT format."""
+    """Step 4: Convert merged checkpoints to LiteRT format.
+
+    litert-torch downgrades torch 2.10→2.9 which is fine since training and
+    merging are already done. The conversion only needs litert-torch + torch.
+    """
     variants = _get_variants()
     variant_names = " + ".join(c["repo_name"] for c in variants)
     print("\n" + "─" * 60)
     print(f"  Step 4/5: Converting {variant_names} to LiteRT")
     print("─" * 60)
 
-    # Training is done by this point. Install litert-torch with torchvision together
-    # so pip resolves compatible torch/torchvision versions (litert downgrades torch
-    # to 2.9.x, so torchvision must match). transformers needs torchvision to import.
+    # Safe to install now — training and merging are done, torch downgrade is fine
     print("  Installing litert-torch...")
-    os.system("pip install -q litert-torch torchvision 'protobuf>=5.26,<7.0'")
+    os.system("pip install -q litert-torch 'protobuf>=5.26,<7.0'")
 
     for config in variants:
         try:
             step_convert_litert_variant(config)
         except Exception as e:
             print(f"  ⚠️  LiteRT conversion failed for {config['repo_name']}: {e}")
-            print(f"      GGUF export will still be available in the upload step.")
+            import traceback
+            traceback.print_exc()
 
 
 def step_upload():
@@ -901,6 +929,9 @@ def main():
         ("Train", step_train),
     ]
     if EXPORT_FORMATS in ("litert", "both"):
+        # Merge adapters FIRST (needs working torch 2.10 + transformers),
+        # THEN install litert-torch (downgrades torch) and convert
+        steps.append(("Merge adapters", step_merge_adapters))
         steps.append(("Convert LiteRT", step_convert_litert))
     steps.append(("Upload", step_upload))
 
