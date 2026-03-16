@@ -1397,11 +1397,36 @@ model = model.merge_and_unload()
 # Untie lm_head weights for LiteRT converter compatibility.
 # Gemma 3 ties embed_tokens and lm_head by default (weight sharing).
 # The LiteRT converter needs them as independent tensors.
+#
+# Gemma 3 4B is multimodal (Gemma3ForConditionalGeneration):
+#   model.model → Gemma3Model (multimodal wrapper)
+#   model.model.language_model → Gemma3ForCausalLM
+#   model.model.language_model.lm_head → output head
+#   model.model.language_model.model.embed_tokens → input embeddings
+#
+# Gemma 3 1B is text-only (Gemma3ForCausalLM):
+#   model.model → Gemma3TextModel
+#   model.lm_head → output head
+#   model.model.embed_tokens → input embeddings
+
+if hasattr(model.model, 'language_model'):
+    # Multimodal architecture (4B)
+    lang = model.model.language_model
+    head = lang.lm_head
+    embed = lang.model.embed_tokens
+    print(f"  Detected multimodal architecture: {{type(model).__name__}}")
+else:
+    # Text-only architecture (1B)
+    head = model.lm_head
+    embed = model.model.embed_tokens
+    print(f"  Detected text-only architecture: {{type(model).__name__}}")
+
 model.config.tie_word_embeddings = False
-if model.lm_head.weight.data_ptr() == model.model.embed_tokens.weight.data_ptr():
-    model.lm_head.weight = torch.nn.Parameter(
-        model.model.embed_tokens.weight.clone()
-    )
+if hasattr(model.config, 'text_config'):
+    model.config.text_config.tie_word_embeddings = False
+
+if head.weight.data_ptr() == embed.weight.data_ptr():
+    head.weight = torch.nn.Parameter(embed.weight.clone())
     print("  Untied lm_head from embed_tokens")
 
 # Save the merged model in safetensors format
