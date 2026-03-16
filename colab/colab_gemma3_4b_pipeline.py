@@ -85,15 +85,16 @@ KV_CACHE_MAX_LEN = 1024       # Max generation context (keys/values cache)
 STOP_TOKEN_IDS = [1, 106]
 BOS_TOKEN_ID = 2
 
-# -- Resume control --
-# Set True to skip Phases 1A-1C (dataset build + training) and resume
-# from Phase 1D (merge). Requires a saved adapter in ADAPTER_DIR.
-SKIP_TRAINING = True
-
 # -- Derived paths --
 ADAPTER_DIR = f"models/{MODEL_NAME}"
 MERGED_DIR = f"models/{MODEL_NAME}-litert/merged"
 OUTPUT_DIR = f"models/{MODEL_NAME}-litert"
+
+# -- Resume control --
+# Auto-detect: skip training if a saved adapter already exists.
+# The adapter is ready when adapter_config.json is present (written by
+# model.save_pretrained at the end of Phase 1C).
+SKIP_TRAINING = os.path.exists(os.path.join(ADAPTER_DIR, "adapter_config.json"))
 
 
 # ═══════════════════════════════════════════════════════════════════════
