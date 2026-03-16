@@ -1118,7 +1118,7 @@ def main():
         print(f"  Adapter dir: {ADAPTER_DIR}")
         # Phase 1D (merge) still needs peft + transformers
         print("Installing merge dependencies...")
-        run("pip install -q peft transformers accelerate safetensors huggingface_hub torch")
+        run("pip install -q peft transformers accelerate safetensors huggingface_hub torch torchvision")
 
     # ══════════════════════════════════════════════════════════
     #  PHASE 1A: Install training dependencies
