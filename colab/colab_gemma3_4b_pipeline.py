@@ -1096,7 +1096,7 @@ def main():
     print(f"  Train Model  : {TRAIN_MODEL}")
     print(f"  Merge Model  : {FULL_PRECISION_MODEL}")
     print(f"  Output       : {OUTPUT_DIR}/")
-    print(f"  Quantization : {LITERT_QUANT}")
+    print(f"  Quantization : {GGUF_QUANT}")
     print("=" * 64)
     print()
 
