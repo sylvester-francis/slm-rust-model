@@ -1488,25 +1488,20 @@ print("Merge complete!")
     #  PHASE 2B: Convert merged PyTorch model → .tflite
     # ══════════════════════════════════════════════════════════
     #
-    # Uses ai-edge-torch's Gemma 3 model builder to reconstruct
-    # the architecture, then converts to TFLite with dynamic int8
-    # quantization. This reduces the model from ~8GB (fp16) to
-    # ~2.2GB (int8) with minimal quality loss.
+    # The official litert-torch Gemma 3 converter supports 1B and
+    # 270M only. For 4B we try three strategies:
     #
-    # NOTE: build_model_4b() may not yet exist in released
-    # ai-edge-torch. If unavailable, fall back to the CLI:
-    #   python -m litert_torch.generative.examples.gemma3.convert_gemma3_to_tflite \
-    #       --model_size=4b --checkpoint_path=... --output_path=...
+    #   A. litert-torch generative API — inspect the gemma3 module
+    #      for a configurable builder and create a 4B config
+    #   B. Generic litert_torch.convert() — torch.export path;
+    #      works but produces a prefill-only model (no KV cache)
+    #   C. Fail gracefully with clear alternatives
+    #
+    # The merged fp16 checkpoint is preserved in MERGED_DIR so the
+    # user can retry with a future converter release.
 
     run_py("Phase 2B: Convert to TFLite", f"""
-import os
-import torch
-
-# ── Strategy A: Programmatic conversion via ai-edge-torch ──
-#
-# The ai-edge-torch library provides model builders that reconstruct
-# the PyTorch architecture from a checkpoint, then export to TFLite
-# via torch.export → StableHLO → TFLite.
+import os, sys, glob, torch
 
 merged_dir = "{MERGED_DIR}"
 output_dir = "{OUTPUT_DIR}"
@@ -1515,65 +1510,134 @@ os.makedirs(output_dir, exist_ok=True)
 tflite_name = "{MODEL_NAME}"
 tflite_path = os.path.join(output_dir, f"{{tflite_name}}_q8_ekv{KV_CACHE_MAX_LEN}.tflite")
 
+converted = False
+
+# ═══════════════════════════════════════════════════════════════
+# Strategy A: Use litert-torch generative API with custom 4B config
+#
+# The gemma3 module has model builders for supported sizes. We
+# introspect the module for a configurable builder or config
+# function that can accept 4B architecture parameters.
+# ═══════════════════════════════════════════════════════════════
 try:
-    # Import the Gemma 3 builder from ai-edge-torch
-    from ai_edge_torch.generative.examples.gemma import gemma3
-    from ai_edge_torch.generative.quantize import quant_recipes
-    from ai_edge_torch.generative.utilities import converter
+    from litert_torch.generative.examples.gemma3 import gemma3 as g3
 
-    print(f"Loading merged model from {{merged_dir}} via gemma3.build_model_4b()...")
+    # Print available API for debugging
+    exports = sorted([x for x in dir(g3) if not x.startswith('_')])
+    print(f"litert-torch gemma3 exports: {{exports}}")
 
-    # build_model_4b() reconstructs the Gemma 3 4B architecture and
-    # loads the merged weights from the checkpoint directory.
-    pytorch_model = gemma3.build_model_4b(checkpoint_path=merged_dir)
-    pytorch_model.eval()
+    # Look for model config / builder functions
+    config_fn = None
+    for name in ['get_model_config', 'get_fake_model_config',
+                  'get_model_config_4b', 'build_model_4b', 'build_4b_model']:
+        if hasattr(g3, name):
+            config_fn = getattr(g3, name)
+            print(f"  Found: {{name}}")
+            break
 
-    # Configure dynamic int8 quantization.
-    # This quantizes weights to int8 and activations dynamically at
-    # inference time — best balance of size reduction and accuracy.
-    quant_config = quant_recipes.full_int8_dynamic_recipe()
+    if config_fn is not None:
+        # Try calling with '4b' argument or no args
+        try:
+            config = config_fn('4b')
+        except TypeError:
+            config = config_fn()
 
-    print(f"Converting to TFLite ({{'{LITERT_QUANT}'}})...")
-    print(f"  prefill_seq_len  = {PREFILL_SEQ_LEN}")
-    print(f"  kv_cache_max_len = {KV_CACHE_MAX_LEN}")
+        print(f"  Config type: {{type(config).__name__}}")
 
-    # Convert the PyTorch model to TFLite format.
-    # prefill_seq_len: chunk size for processing the input prompt
-    # kv_cache_max_len: maximum context length for generation
-    edge_model = converter.convert_to_tflite(
-        pytorch_model,
-        tflite_path=tflite_path,
-        prefill_seq_len={PREFILL_SEQ_LEN},
-        kv_cache_max_len={KV_CACHE_MAX_LEN},
-        quantize_config=quant_config,
-    )
+        # Look for a build function that takes config + checkpoint
+        build_fn = None
+        for name in ['build_model', 'build_gemma3_model']:
+            if hasattr(g3, name):
+                build_fn = getattr(g3, name)
+                break
 
-    print(f"Saved TFLite model: {{tflite_path}}")
+        if build_fn:
+            from litert_torch.generative.quantize import quant_recipes
+            from litert_torch.generative.utilities import converter
 
-except (ImportError, AttributeError, NotImplementedError) as e:
-    # ── Strategy B: Fall back to the CLI converter ──
-    #
-    # If build_model_4b() is not available (e.g., only 1B/270M
-    # supported), use the litert-torch CLI tool instead.
-    print(f"Programmatic conversion unavailable: {{e}}")
-    print("Falling back to litert-torch CLI converter...")
+            model = build_fn(config, checkpoint_path=merged_dir)
+            model.eval()
 
-    import subprocess, sys
-    cmd = (
-        f"{{sys.executable}} -m litert_torch.generative.examples.gemma3"
-        f".convert_gemma3_to_tflite"
-        f" --model_size=4b"
-        f" --checkpoint_path={{merged_dir}}"
-        f" --output_path={{output_dir}}"
-        f" --output_name_prefix={{tflite_name}}"
-        f" --quantize={LITERT_QUANT}"
-        f" --kv_cache_max_len={KV_CACHE_MAX_LEN}"
-    )
-    print(f"  $ {{cmd}}")
-    subprocess.run(cmd, shell=True, check=True)
+            quant_config = quant_recipes.full_int8_dynamic_recipe()
+            print(f"Converting (prefill={{PREFILL_SEQ_LEN}}, kv_cache={KV_CACHE_MAX_LEN})...")
+
+            converter.convert_to_tflite(
+                model,
+                tflite_path=tflite_path,
+                prefill_seq_len={PREFILL_SEQ_LEN},
+                kv_cache_max_len={KV_CACHE_MAX_LEN},
+                quantize_config=quant_config,
+            )
+            converted = True
+            print(f"Converted via litert-torch generative API")
+        else:
+            print("  No build function found, trying next strategy...")
+    else:
+        print("  No config/builder function found for 4B")
+
+except Exception as e:
+    print(f"Strategy A failed: {{e}}")
+
+# ═══════════════════════════════════════════════════════════════
+# Strategy B: Generic litert_torch.convert() via torch.export
+#
+# This converts the HuggingFace model directly to TFLite using
+# the general-purpose torch.export → StableHLO → TFLite path.
+# The resulting model handles prompt processing but does NOT have
+# built-in KV cache management for autoregressive generation.
+# ═══════════════════════════════════════════════════════════════
+if not converted:
+    try:
+        import litert_torch
+        from transformers import AutoModelForCausalLM
+
+        print()
+        print("Trying generic litert_torch.convert()...")
+        print("  NOTE: This produces a prompt-processing model without")
+        print("  built-in KV cache. For full generative inference, wait")
+        print("  for official 4B support in litert-torch.")
+
+        model = AutoModelForCausalLM.from_pretrained(
+            merged_dir, torch_dtype=torch.float32, device_map="cpu",
+        )
+        model.eval()
+
+        sample_input = torch.randint(0, 1000, (1, {PREFILL_SEQ_LEN}))
+        sample_mask = torch.ones(1, {PREFILL_SEQ_LEN}, dtype=torch.long)
+
+        edge_model = litert_torch.convert(
+            model, (sample_input, sample_mask),
+        )
+        edge_model.export(tflite_path)
+        converted = True
+        print(f"Converted via generic path: {{tflite_path}}")
+
+    except Exception as e:
+        print(f"Strategy B failed: {{e}}")
+
+# ═══════════════════════════════════════════════════════════════
+# Strategy C: All strategies exhausted — inform user
+# ═══════════════════════════════════════════════════════════════
+if not converted:
+    print()
+    print("=" * 60)
+    print("  Gemma 3 4B -> TFLite: not yet supported")
+    print("=" * 60)
+    print()
+    print("The litert-torch Gemma 3 converter supports 1B and 270M only.")
+    print(f"Your merged fp16 checkpoint is saved at: {{merged_dir}}")
+    print()
+    print("Options:")
+    print("  1. Re-run when litert-torch adds 4B support")
+    print("     pip install -U litert-torch")
+    print("  2. Use Gemma 3 1B instead (fully supported):")
+    print("     python colab/colab_gemma3_pipeline.py")
+    print("  3. Convert to GGUF for llama.cpp / PocketPal AI:")
+    print("     python slm.py convert --variant 4b")
+    print()
+    sys.exit(1)
 
 # Report output
-import glob
 for f in glob.glob(os.path.join(output_dir, "*.tflite")):
     size_mb = os.path.getsize(f) / 1024**2
     print(f"  {{os.path.basename(f)}} ({{size_mb:.0f}} MB)")
