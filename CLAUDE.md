@@ -18,46 +18,40 @@ Uses QLoRA via Unsloth for efficient training. Target deployment: offline on And
 ## Architecture
 
 ```
-slm.py                          → Unified CLI (dispatches to scripts/*)
-scripts/
-  data_collection.py            → Synthetic Rust tutor conversation generator (46 seed examples, 28 topics)
-  data_preprocessing.py         → Merges Strandset-Rust-v1 + synthetic data into training JSONL
-  training.py                   → QLoRA fine-tuning with Unsloth + TRL SFTTrainer
-  evaluation.py                 → Keyword-match evaluation on 5 Rust tutor prompts
-  convert_gguf.py               → GGUF export via Unsloth (q4_k_m default)
-  convert_litert.py             → LiteRT (.tflite) export for Qwen3 models
-  bundle_litertlm.py            → Bundle .tflite + tokenizer → .litertlm for Google AI Edge Gallery
-  upload_to_hf.py               → HuggingFace Hub upload with model card
-  deploy_ollama.py              → Local Ollama deployment
+slm.py                          → Unified CLI (dispatches to rustmentor/*)
+rustmentor/                     → Main Python package
+  config.py                     → Single source of truth: prompts, variants, constants
+  data/
+    collection.py               → Synthetic Rust tutor conversation generator (46 seeds, 28 topics)
+    preprocessing.py            → Merges Strandset-Rust-v1 + synthetic data into training JSONL
+  training/
+    trainer.py                  → QLoRA fine-tuning with Unsloth + TRL SFTTrainer
+    evaluation.py               → Keyword-match evaluation on 5 Rust tutor prompts
+  export/
+    gguf.py                     → GGUF export via Unsloth + llama.cpp (Gemma3 support)
+    litert.py                   → LiteRT (.tflite) export for Qwen3 + Gemma3 models
+    bundle.py                   → Bundle .tflite + tokenizer → .litertlm for AI Edge Gallery
+  deploy/
+    huggingface.py              → HuggingFace Hub upload with model card
+    ollama.py                   → Local Ollama deployment
+tutorials/                      → Step-by-step tutorial scripts (01 through 05)
 colab/
-  colab_gemma3_pipeline.py      → Full Gemma3-1B pipeline: train → merge → convert → bundle → upload
-  colab_litert_convert.py       → Download from HF → merge → convert → bundle (Qwen3)
-  colab_bundle_only.py          → Download .tflite from HF → bundle .litertlm → upload
-  colab_train_and_upload.py     → Qwen3 training pipeline (legacy)
+  colab_gemma3_pipeline.py      → Gemma3-1B: train → merge → LiteRT → upload (Pixel 8 Pro)
+  colab_gemma3_4b_pipeline.py   → Gemma3-4B: train → merge → GGUF → upload (PocketPal AI)
 ```
 
-## Gemma3 Mobile Pipeline (Recommended)
+## Quick Start
 
+### Tutorial (step by step)
 ```bash
-# Full pipeline in Colab:
-!python colab/colab_gemma3_pipeline.py
+python tutorials/01_data_preparation.py       # Generate & merge training data
+python tutorials/02_fine_tuning.py             # Train with QLoRA (needs GPU)
+python tutorials/03_evaluation.py              # Evaluate model quality
+python tutorials/04_export.py                  # Export to GGUF or LiteRT
+python tutorials/05_deploy.py                  # Deploy to Ollama or HuggingFace
 ```
 
-| Setting | Value |
-|---------|-------|
-| Base Model | `unsloth/gemma-3-1b-it` (Gemma license) |
-| LoRA r | 16 |
-| Batch Size | 2 × 4 = 8 effective |
-| Epochs | 3 |
-| LiteRT Quant | dynamic_int8 (~650MB) |
-| Stop Tokens | `[1, 106]` (`<eos>`, `<end_of_turn>`) |
-| GPU Delegation | Full on Tensor G3 (Mali-G715) |
-| Chat Template | `<start_of_turn>` / `<end_of_turn>` |
-
-Pipeline: Train (Unsloth) → Merge (fp16) → Convert (.tflite via Gemma3 converter) → Bundle (.litertlm) → Upload to HF
-
-## Legacy Qwen3 Commands
-
+### CLI (all-in-one)
 ```bash
 python slm.py pipeline --variant 0.6b --username <hf-user>
 python slm.py train --variant 1.7b
@@ -65,11 +59,26 @@ python slm.py convert --variant 0.6b           # GGUF
 python slm.py convert-litert --variant 0.6b    # LiteRT
 ```
 
+### Colab (Gemma3 mobile)
+```bash
+!python colab/colab_gemma3_pipeline.py
+```
+
+## Shared Config (rustmentor/config.py)
+
+All shared constants live in `rustmentor/config.py`:
+- `SYSTEM_PROMPT` — RustMentor persona used in training, eval, and deployment
+- `VARIANT_CONFIGS` — Presets for all model sizes (8b, 4b, 1.7b, 0.6b, gemma3-1b, gemma3-4b)
+- `BNB4BIT_TO_FULL` — Maps Unsloth 4-bit model names to full-precision equivalents
+- `EVAL_PROMPTS` — 5 evaluation prompts with expected keywords
+- `STOP_TOKENS` — Per-model stop token IDs for .litertlm bundling
+- `MODEL_CARD_TEMPLATE` — HuggingFace model card template
+
 ## Data Pipeline
 
-1. `data_collection.py` has 46 hand-written Rust tutoring conversations across 28 topics (ownership, error handling, traits, async, smart pointers, macros, serde, testing, etc.)
-2. `generate_rust_dataset()` duplicates seed examples to reach target count (no actual variation)
-3. `data_preprocessing.py` loads Strandset-Rust-v1 from HuggingFace, reformats to chat template, merges with synthetic data
+1. `rustmentor/data/seeds.py` has 46 hand-written Rust tutoring conversations across 28 topics
+2. `generate_rust_dataset()` duplicates seed examples to reach target count
+3. `preprocess_and_merge()` loads Strandset-Rust-v1 from HuggingFace, reformats, merges with synthetic data
 
 ## Dependencies
 
@@ -80,5 +89,6 @@ torch, transformers, accelerate, peft, trl, bitsandbytes, datasets, unsloth, hug
 - Gemma3 requires accepting the license at huggingface.co/google/gemma-3-1b-it
 - Gemma license (not Apache 2.0) — free for commercial use, has Prohibited Use Policy
 - LiteRT converter only supports Gemma3 1B and 270M (no 4B)
-- The `slm.py` CLI imports from `scripts.*` — the `scripts/` directory with `__init__.py` must exist
+- The `slm.py` CLI imports from `rustmentor.*` — the `rustmentor/` package must exist
+- `rustmentor/data/seeds.py` contains the canonical 46 seed conversations
 - HF_TOKEN required for upload and Gemma model access

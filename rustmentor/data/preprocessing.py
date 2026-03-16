@@ -1,11 +1,19 @@
 """
-Data Preprocessing: Merge and format datasets for training.
+Step 2: Data Preprocessing — Merge and format datasets for training.
 
-Combines:
-1. Strandset-Rust-v1 (code tasks) — subset and reformat
-2. Synthetic tutor Q&A — already formatted
+Combines two data sources:
+  1. Strandset-Rust-v1 (Rust code tasks from HuggingFace)
+  2. Synthetic RustMentor tutor Q&A (generated in Step 1)
 
-Outputs Qwen3 chat-template compatible JSONL.
+Outputs chat-template compatible JSONL for Qwen3/Gemma3 training.
+
+Usage:
+    from rustmentor.data import preprocess_and_merge
+    count = preprocess_and_merge(
+        synthetic_path="data/processed/rust_tutor_synthetic.jsonl",
+        strandset_samples=3000,
+        output_path="data/processed/train.jsonl",
+    )
 """
 
 import json
@@ -13,22 +21,16 @@ import os
 import random
 from typing import Optional
 
-SYSTEM_PROMPT = """You are RustMentor, an expert Rust programming tutor. The student is an experienced Go, Python, and TypeScript developer learning Rust by building CLI tools.
-
-Your teaching style:
-- Draw parallels to Go/Python/TypeScript concepts they already know
-- Explain ownership, borrowing, and lifetimes with practical examples
-- When reviewing code, explain what the borrow checker is doing and why
-- Keep explanations concise with code snippets
-- Guide them to write the code themselves rather than giving full solutions
-- Use the Socratic method when appropriate
-"""
+from rustmentor.config import SYSTEM_PROMPT
 
 
 def format_strandset_sample(sample: dict) -> Optional[dict]:
-    """Convert a Strandset-Rust-v1 sample to chat format."""
+    """Convert a Strandset-Rust-v1 sample to chat format.
+
+    Handles multiple field formats (instruction/output, prompt/response,
+    messages, conversations) and applies quality filters.
+    """
     try:
-        # Strandset uses various formats — adapt based on available fields
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
         if "instruction" in sample and "output" in sample:
@@ -53,7 +55,7 @@ def format_strandset_sample(sample: dict) -> Optional[dict]:
         if "user" not in roles or "assistant" not in roles:
             return None
 
-        # Length check
+        # Length check: filter out too-short or too-long samples
         total_len = sum(len(m["content"]) for m in messages)
         if total_len < 50 or total_len > 15000:
             return None
@@ -65,7 +67,11 @@ def format_strandset_sample(sample: dict) -> Optional[dict]:
 
 
 def load_strandset(num_samples: int = 3000) -> list:
-    """Load and subset Strandset-Rust-v1 from HuggingFace."""
+    """Load and subset Strandset-Rust-v1 from HuggingFace.
+
+    Downloads the dataset, shuffles, formats, and filters to the
+    target count. Returns empty list if download fails.
+    """
     try:
         from datasets import load_dataset
 
@@ -73,9 +79,8 @@ def load_strandset(num_samples: int = 3000) -> list:
         ds = load_dataset("Fortytwo-Network/Strandset-Rust-v1", split="train")
         print(f"  Loaded {len(ds)} total examples")
 
-        # Shuffle and subset
         ds = ds.shuffle(seed=42)
-        subset = ds.select(range(min(num_samples * 2, len(ds))))  # take extra for filtering
+        subset = ds.select(range(min(num_samples * 2, len(ds))))
 
         formatted = []
         for sample in subset:
@@ -88,16 +93,22 @@ def load_strandset(num_samples: int = 3000) -> list:
         print(f"  Formatted {len(formatted)} Strandset samples")
         return formatted
 
+    except ImportError:
+        print("  Warning: 'datasets' package not installed.")
+        print("  Install with: pip install datasets")
+        print("  Continuing with synthetic data only...")
+        return []
     except Exception as e:
-        print(f"  ⚠️  Could not load Strandset: {e}")
-        print(f"  Continuing with synthetic data only...")
+        print(f"  Warning: Could not load Strandset: {e}")
+        print("  Continuing with synthetic data only...")
         return []
 
 
 def load_synthetic(path: str) -> list:
-    """Load synthetic tutor data from JSONL."""
+    """Load synthetic tutor data from JSONL file."""
     if not os.path.exists(path):
-        print(f"  ⚠️  Synthetic data not found: {path}")
+        print(f"  Warning: Synthetic data not found: {path}")
+        print("  Run Step 1 (data collection) first.")
         return []
 
     samples = []
@@ -105,7 +116,10 @@ def load_synthetic(path: str) -> list:
         for line in f:
             line = line.strip()
             if line:
-                samples.append(json.loads(line))
+                try:
+                    samples.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
 
     print(f"  Loaded {len(samples)} synthetic samples")
     return samples
@@ -117,20 +131,32 @@ def preprocess_and_merge(
     output_path: str = "data/processed/train.jsonl",
     max_seq_length: int = 2048,
 ) -> int:
-    """
-    Merge datasets and produce final training JSONL.
+    """Merge datasets and produce final training JSONL.
 
-    Returns number of samples written.
+    Combines synthetic tutor Q&A with Strandset-Rust-v1 code tasks,
+    shuffles, and writes output files including size variants.
+
+    Args:
+        synthetic_path: Path to the synthetic JSONL from Step 1.
+        strandset_samples: How many Strandset samples to include.
+        output_path: Where to write the merged JSONL.
+        max_seq_length: Maximum sequence length (for reference).
+
+    Returns:
+        Total number of samples written.
     """
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    # Load both sources
     print("\n  Loading datasets...")
     synthetic = load_synthetic(synthetic_path)
     strandset = load_strandset(strandset_samples)
 
-    # Merge
     all_samples = synthetic + strandset
+    if not all_samples:
+        print("  Error: No training data available.")
+        print("  Run Step 1 (data collection) first, or check network for Strandset.")
+        return 0
+
     random.seed(42)
     random.shuffle(all_samples)
 
@@ -138,16 +164,15 @@ def preprocess_and_merge(
     print(f"    Synthetic: {len(synthetic)}")
     print(f"    Strandset: {len(strandset)}")
 
-    # Write output
+    # Write full dataset
     with open(output_path, "w") as f:
         for sample in all_samples:
             f.write(json.dumps(sample) + "\n")
 
-    # Also create size variants (matching TypeScript SLM pattern)
+    # Create size variants for quick iteration
     variants = {
         "train_small.jsonl": min(500, len(all_samples)),
         "train_medium.jsonl": min(2000, len(all_samples)),
-        "train.jsonl": len(all_samples),
     }
 
     for filename, count in variants.items():

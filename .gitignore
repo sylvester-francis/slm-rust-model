@@ -32,6 +32,13 @@ Thumbs.db
 # Colab
 .ipynb_checkpoints/
 
+# LiteRT artifacts
+*.tflite
+*.litertlm
+
+# Compressed archives
+*.tar.gz
+
 # Internal docs (keep README.md public)
 docs/COLAB.md
 docs/MOBILE.md
