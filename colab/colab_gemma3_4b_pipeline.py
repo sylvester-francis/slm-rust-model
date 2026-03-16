@@ -85,6 +85,11 @@ KV_CACHE_MAX_LEN = 1024       # Max generation context (keys/values cache)
 STOP_TOKEN_IDS = [1, 106]
 BOS_TOKEN_ID = 2
 
+# -- Resume control --
+# Set True to skip Phases 1A-1C (dataset build + training) and resume
+# from Phase 1D (merge). Requires a saved adapter in ADAPTER_DIR.
+SKIP_TRAINING = True
+
 # -- Derived paths --
 ADAPTER_DIR = f"models/{MODEL_NAME}"
 MERGED_DIR = f"models/{MODEL_NAME}-litert/merged"
@@ -1064,14 +1069,19 @@ def run(cmd: str) -> None:
     subprocess.run(cmd, shell=True, check=True)
 
 
-def run_py(name: str, script: str) -> None:
+def run_py(name: str, script: str, skip: bool = False) -> None:
     """
     Execute a Python script in a subprocess for dependency isolation.
 
     Training (Unsloth/transformers) and conversion (litert-torch/ai-edge-torch)
     need conflicting torch versions. Running each phase in its own subprocess
     keeps the environments from colliding.
+
+    If skip=True, prints a skip message and returns immediately.
     """
+    if skip:
+        print(f"\n  SKIPPED: {name}")
+        return
     print(f"\n{'=' * 64}")
     print(f"  {name}")
     print(f"{'=' * 64}\n")
@@ -1102,6 +1112,13 @@ def main():
     print("=" * 64)
     print()
 
+    if SKIP_TRAINING:
+        print(f"SKIP_TRAINING=True — jumping to Phase 1D (merge)")
+        print(f"  Adapter dir: {ADAPTER_DIR}")
+        # Phase 1D (merge) still needs peft + transformers
+        print("Installing merge dependencies...")
+        run("pip install -q peft transformers accelerate safetensors huggingface_hub torch")
+
     # ══════════════════════════════════════════════════════════
     #  PHASE 1A: Install training dependencies
     # ══════════════════════════════════════════════════════════
@@ -1111,9 +1128,10 @@ def main():
     # bitsandbytes enables 4-bit NormalFloat quantization for QLoRA.
     # transformers >=4.51.3 is required for Gemma 3 support.
 
-    print("Installing training dependencies...")
-    run("pip install -q unsloth trl peft accelerate bitsandbytes datasets huggingface_hub hf_transfer")
-    run("pip install -q 'transformers>=4.51.3,<=5.2.0'")
+    if not SKIP_TRAINING:
+        print("Installing training dependencies...")
+        run("pip install -q unsloth trl peft accelerate bitsandbytes datasets huggingface_hub hf_transfer")
+        run("pip install -q 'transformers>=4.51.3,<=5.2.0'")
 
     # ══════════════════════════════════════════════════════════
     #  PHASE 1B: Build training dataset and save to JSONL
@@ -1126,16 +1144,17 @@ def main():
 
     # Write seeds to a temp JSON file so the subprocess can load them
     # without repr/eval escaping issues.
-    import json as _json
     seeds_json_path = "data/processed/_seeds_tmp.json"
-    os.makedirs("data/processed", exist_ok=True)
-    with open(seeds_json_path, "w") as _f:
-        _json.dump({
-            "seeds": SEED_CONVERSATIONS,
-            "system_prompt": SYSTEM_PROMPT,
-        }, _f)
+    if not SKIP_TRAINING:
+        import json as _json
+        os.makedirs("data/processed", exist_ok=True)
+        with open(seeds_json_path, "w") as _f:
+            _json.dump({
+                "seeds": SEED_CONVERSATIONS,
+                "system_prompt": SYSTEM_PROMPT,
+            }, _f)
 
-    run_py("Build Training Dataset", f"""
+    run_py("Build Training Dataset", skip=SKIP_TRAINING, script=f"""
 import json
 import os
 
@@ -1200,7 +1219,7 @@ print(f"Saved to: {{output_path}}")
     # LoRA targets all attention + MLP projections to capture
     # both language understanding and generation quality.
 
-    run_py("Phase 1: QLoRA Fine-Tuning", f"""
+    run_py("Phase 1C: QLoRA Fine-Tuning", skip=SKIP_TRAINING, script=f"""
 import json
 import os
 import torch
