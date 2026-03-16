@@ -1399,25 +1399,25 @@ model = model.merge_and_unload()
 # The LiteRT converter needs them as independent tensors.
 #
 # Gemma 3 4B is multimodal (Gemma3ForConditionalGeneration):
-#   model.model → Gemma3Model (multimodal wrapper)
-#   model.model.language_model → Gemma3ForCausalLM
-#   model.model.language_model.lm_head → output head
-#   model.model.language_model.model.embed_tokens → input embeddings
+#   model.lm_head            → output head (top-level)
+#   model.model              → Gemma3Model (multimodal wrapper)
+#   model.model.language_model → Gemma3TextModel (NOT ForCausalLM!)
+#   model.model.language_model.embed_tokens → input embeddings
 #
 # Gemma 3 1B is text-only (Gemma3ForCausalLM):
-#   model.model → Gemma3TextModel
-#   model.lm_head → output head
+#   model.lm_head            → output head (top-level)
+#   model.model              → Gemma3TextModel
 #   model.model.embed_tokens → input embeddings
+#
+# In both cases lm_head is on the top-level model.
 
+head = model.lm_head
 if hasattr(model.model, 'language_model'):
-    # Multimodal architecture (4B)
-    lang = model.model.language_model
-    head = lang.lm_head
-    embed = lang.model.embed_tokens
+    # Multimodal (4B): embed_tokens is on the nested Gemma3TextModel
+    embed = model.model.language_model.embed_tokens
     print(f"  Detected multimodal architecture: {{type(model).__name__}}")
 else:
-    # Text-only architecture (1B)
-    head = model.lm_head
+    # Text-only (1B): embed_tokens is directly on model.model
     embed = model.model.embed_tokens
     print(f"  Detected text-only architecture: {{type(model).__name__}}")
 
