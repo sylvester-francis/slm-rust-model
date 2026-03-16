@@ -14,22 +14,18 @@ Pipeline:
     1c. Train with LoRA adapters (peft) + SFTTrainer (trl)
     1d. Merge LoRA weights back into base model (fp16)
 
-  Phase 2 — LiteRT Conversion & Bundling
-    2a. Load merged model with ai-edge-torch gemma3.build_model_4b()
-    2b. Convert to .tflite with dynamic_int8 quantization
-    2c. Bundle .tflite + tokenizer.model → .litertlm
+  Phase 2 — GGUF Conversion
+    2a. Build llama.cpp (cmake)
+    2b. Convert merged model → f16 GGUF → Q4_K_M GGUF
+    2c. Upload to HuggingFace with model card
 
-Target Hardware : Offline Android (Pixel 9 Pro / Tensor G4, or similar)
+Target Hardware : Offline Android (Pixel 8/9 Pro) via PocketPal AI / llama.cpp
 Training GPU    : A100 40GB (recommended) or L4 24GB
-Output          : .litertlm bundle (~2.2GB estimated at int8)
+Output          : .gguf Q4_K_M (~2.5GB)
 
-WARNING: As of early 2025, the official LiteRT Gemma 3 converter only
-supports 1B and 270M sizes. This script targets 4B, which requires
-either a future converter update or a custom export path. The code is
-written to the public ai-edge-torch API so it will work once 4B support
-lands. If you hit an unsupported-size error, fall back to the CLI:
-  python -m litert_torch.generative.examples.gemma3.convert_gemma3_to_tflite \\
-      --model_size=4b ...
+NOTE: The LiteRT Gemma 3 converter only supports 1B/270M, so this
+pipeline exports to GGUF (Q4_K_M) via llama.cpp instead. The GGUF
+format is compatible with PocketPal AI, llama.cpp, and Maid on Android.
 
 Usage (Colab A100):
     !git clone https://github.com/sylvester-francis/slm-rust-model.git
@@ -73,17 +69,8 @@ EPOCHS = 3            # Full passes over the dataset
 LR = 2e-4             # Learning rate (cosine schedule with warmup)
 MAX_SEQ_LENGTH = 2048 # Maximum token length per training example
 
-# -- LiteRT export settings --
-LITERT_QUANT = "dynamic_int8"  # Quantization: dynamic_int8, dynamic_int4, fp16
-PREFILL_SEQ_LEN = 128         # Input prompt chunk size for the TFLite model
-KV_CACHE_MAX_LEN = 1024       # Max generation context (keys/values cache)
-
-# Gemma 3 special token IDs:
-#   1  = <eos>           (end of sequence)
-#   106 = <end_of_turn>  (end of a chat turn)
-#   2  = <bos>           (beginning of sequence)
-STOP_TOKEN_IDS = [1, 106]
-BOS_TOKEN_ID = 2
+# -- GGUF export settings --
+GGUF_QUANT = "Q4_K_M"  # k-quant mixed precision: attn 6-bit, MLP 4-bit
 
 # -- Derived paths --
 ADAPTER_DIR = f"models/{MODEL_NAME}"
@@ -1465,294 +1452,199 @@ print("Merge complete!")
 """)
 
     # ══════════════════════════════════════════════════════════
-    #  PHASE 2A: Install LiteRT / ai-edge-torch dependencies
+    #  PHASE 2A: Build llama.cpp for GGUF conversion
     # ══════════════════════════════════════════════════════════
     #
-    # litert-torch (and its ai-edge-torch backend) may conflict
-    # with the transformers torch version used during training.
-    # We install it after training completes. The pip commands
-    # below handle the dependency juggling:
+    # llama.cpp provides the gold-standard GGUF conversion tools:
+    #   - convert_hf_to_gguf.py: HuggingFace → GGUF (f16)
+    #   - llama-quantize: f16 → Q4_K_M (k-quant mixed precision)
     #
-    #   1. Remove TensorFlow (often pre-installed in Colab, conflicts)
-    #   2. Install litert-torch which brings in ai-edge-torch
-    #   3. Force-reinstall torchao for quantization support
+    # Q4_K_M keeps attention layers at higher precision (6-bit)
+    # while compressing MLP layers to 4-bit. Best balance of
+    # size (~2.5GB) and accuracy for a 4B parameter model.
 
     print(f"\n{'=' * 64}")
-    print("  Installing LiteRT / ai-edge-torch dependencies")
+    print("  Building llama.cpp for GGUF conversion")
     print(f"{'=' * 64}\n")
-    run("pip uninstall -y tensorflow tensorflow-cpu keras -q 2>/dev/null || true")
-    run("pip install -q ai-edge-torch litert-torch 'protobuf>=5.26,<7.0'")
-    run("pip install -q 'torchao==0.11.0' --force-reinstall --no-deps")
+    run("pip install -q gguf sentencepiece protobuf numpy")
+    if not os.path.exists("llama.cpp/build/bin/llama-quantize"):
+        run("git clone --depth 1 https://github.com/ggerganov/llama.cpp.git llama.cpp")
+        run("cmake -B llama.cpp/build -S llama.cpp -DCMAKE_BUILD_TYPE=Release")
+        run("cmake --build llama.cpp/build --config Release -j$(nproc) --target llama-quantize")
+    else:
+        print("  llama.cpp already built, skipping")
 
     # ══════════════════════════════════════════════════════════
-    #  PHASE 2B: Convert merged PyTorch model → .tflite
+    #  PHASE 2B: Convert merged HuggingFace model → GGUF
     # ══════════════════════════════════════════════════════════
     #
-    # The official litert-torch Gemma 3 converter supports 1B and
-    # 270M only. For 4B we try three strategies:
+    # Two-step conversion:
+    #   1. convert_hf_to_gguf.py: HF safetensors → f16 GGUF
+    #   2. llama-quantize: f16 → Q4_K_M
     #
-    #   A. litert-torch generative API — inspect the gemma3 module
-    #      for a configurable builder and create a 4B config
-    #   B. Generic litert_torch.convert() — torch.export path;
-    #      works but produces a prefill-only model (no KV cache)
-    #   C. Fail gracefully with clear alternatives
+    # Q4_K_M (k-quant mixed precision):
+    #   - Attention layers: 6-bit (preserves reasoning quality)
+    #   - MLP layers: 4-bit (compresses bulk of parameters)
+    #   - Result: ~2.5GB for a 4B model, minimal accuracy loss
     #
-    # The merged fp16 checkpoint is preserved in MERGED_DIR so the
-    # user can retry with a future converter release.
+    # Target runtime: PocketPal AI, llama.cpp, or custom NDK app
 
-    run_py("Phase 2B: Convert to TFLite", f"""
-import os, sys, glob, torch
+    run_py("Phase 2B: Convert to GGUF (Q4_K_M)", f"""
+import os, sys, subprocess, glob
 
 merged_dir = "{MERGED_DIR}"
 output_dir = "{OUTPUT_DIR}"
 os.makedirs(output_dir, exist_ok=True)
 
-tflite_name = "{MODEL_NAME}"
-tflite_path = os.path.join(output_dir, f"{{tflite_name}}_q8_ekv{KV_CACHE_MAX_LEN}.tflite")
+f16_gguf = os.path.join(output_dir, "{MODEL_NAME}-f16.gguf")
+final_gguf = os.path.join(output_dir, "{MODEL_NAME}-Q4_K_M.gguf")
 
-converted = False
+# ── Step 1: HuggingFace → f16 GGUF ──
+# convert_hf_to_gguf.py reads safetensors + config.json and writes
+# a single .gguf file with all weights in float16.
+print("Converting HuggingFace checkpoint to f16 GGUF...")
+subprocess.run([
+    sys.executable, "llama.cpp/convert_hf_to_gguf.py",
+    merged_dir,
+    "--outfile", f16_gguf,
+    "--outtype", "f16",
+], check=True)
 
-# ═══════════════════════════════════════════════════════════════
-# Strategy A: Use litert-torch generative API with custom 4B config
-#
-# The gemma3 module has model builders for supported sizes. We
-# introspect the module for a configurable builder or config
-# function that can accept 4B architecture parameters.
-# ═══════════════════════════════════════════════════════════════
-try:
-    from litert_torch.generative.examples.gemma3 import gemma3 as g3
+f16_size = os.path.getsize(f16_gguf) / 1024**3
+print(f"  f16 GGUF: {{f16_size:.1f}} GB")
 
-    # Print available API for debugging
-    exports = sorted([x for x in dir(g3) if not x.startswith('_')])
-    print(f"litert-torch gemma3 exports: {{exports}}")
+# ── Step 2: f16 → Q4_K_M quantization ──
+# llama-quantize applies k-quant mixed precision:
+#   - Important layers (attention Q/K/V, output) → 6-bit
+#   - Bulk layers (MLP gate/up/down) → 4-bit
+#   - Embeddings → kept at higher precision
+# This preserves model quality while cutting size ~75%.
+print("Quantizing to Q4_K_M...")
 
-    # Look for model config / builder functions
-    config_fn = None
-    for name in ['get_model_config', 'get_fake_model_config',
-                  'get_model_config_4b', 'build_model_4b', 'build_4b_model']:
-        if hasattr(g3, name):
-            config_fn = getattr(g3, name)
-            print(f"  Found: {{name}}")
-            break
+quantize_bin = "llama.cpp/build/bin/llama-quantize"
+subprocess.run([quantize_bin, f16_gguf, final_gguf, "Q4_K_M"], check=True)
 
-    if config_fn is not None:
-        # Try calling with '4b' argument or no args
-        try:
-            config = config_fn('4b')
-        except TypeError:
-            config = config_fn()
+final_size = os.path.getsize(final_gguf) / 1024**3
+print(f"  Q4_K_M GGUF: {{final_size:.2f}} GB")
 
-        print(f"  Config type: {{type(config).__name__}}")
+# ── Clean up f16 intermediate (saves ~8GB disk) ──
+os.remove(f16_gguf)
+print(f"  Removed intermediate f16 GGUF")
 
-        # Look for a build function that takes config + checkpoint
-        build_fn = None
-        for name in ['build_model', 'build_gemma3_model']:
-            if hasattr(g3, name):
-                build_fn = getattr(g3, name)
-                break
-
-        if build_fn:
-            from litert_torch.generative.quantize import quant_recipes
-            from litert_torch.generative.utilities import converter
-
-            model = build_fn(config, checkpoint_path=merged_dir)
-            model.eval()
-
-            quant_config = quant_recipes.full_int8_dynamic_recipe()
-            print(f"Converting (prefill={{PREFILL_SEQ_LEN}}, kv_cache={KV_CACHE_MAX_LEN})...")
-
-            converter.convert_to_tflite(
-                model,
-                tflite_path=tflite_path,
-                prefill_seq_len={PREFILL_SEQ_LEN},
-                kv_cache_max_len={KV_CACHE_MAX_LEN},
-                quantize_config=quant_config,
-            )
-            converted = True
-            print(f"Converted via litert-torch generative API")
-        else:
-            print("  No build function found, trying next strategy...")
-    else:
-        print("  No config/builder function found for 4B")
-
-except Exception as e:
-    print(f"Strategy A failed: {{e}}")
-
-# ═══════════════════════════════════════════════════════════════
-# Strategy B: Generic litert_torch.convert() via torch.export
-#
-# This converts the HuggingFace model directly to TFLite using
-# the general-purpose torch.export → StableHLO → TFLite path.
-# The resulting model handles prompt processing but does NOT have
-# built-in KV cache management for autoregressive generation.
-# ═══════════════════════════════════════════════════════════════
-if not converted:
-    try:
-        import litert_torch
-        from transformers import AutoModelForCausalLM
-
-        print()
-        print("Trying generic litert_torch.convert()...")
-        print("  NOTE: This produces a prompt-processing model without")
-        print("  built-in KV cache. For full generative inference, wait")
-        print("  for official 4B support in litert-torch.")
-
-        model = AutoModelForCausalLM.from_pretrained(
-            merged_dir, torch_dtype=torch.float32, device_map="cpu",
-        )
-        model.eval()
-
-        sample_input = torch.randint(0, 1000, (1, {PREFILL_SEQ_LEN}))
-        sample_mask = torch.ones(1, {PREFILL_SEQ_LEN}, dtype=torch.long)
-
-        edge_model = litert_torch.convert(
-            model, (sample_input, sample_mask),
-        )
-        edge_model.export(tflite_path)
-        converted = True
-        print(f"Converted via generic path: {{tflite_path}}")
-
-    except Exception as e:
-        print(f"Strategy B failed: {{e}}")
-
-# ═══════════════════════════════════════════════════════════════
-# Strategy C: All strategies exhausted — inform user
-# ═══════════════════════════════════════════════════════════════
-if not converted:
-    print()
-    print("=" * 60)
-    print("  Gemma 3 4B -> TFLite: not yet supported")
-    print("=" * 60)
-    print()
-    print("The litert-torch Gemma 3 converter supports 1B and 270M only.")
-    print(f"Your merged fp16 checkpoint is saved at: {{merged_dir}}")
-    print()
-    print("Options:")
-    print("  1. Re-run when litert-torch adds 4B support")
-    print("     pip install -U litert-torch")
-    print("  2. Use Gemma 3 1B instead (fully supported):")
-    print("     python colab/colab_gemma3_pipeline.py")
-    print("  3. Convert to GGUF for llama.cpp / PocketPal AI:")
-    print("     python slm.py convert --variant 4b")
-    print()
-    sys.exit(1)
-
-# Report output
-for f in glob.glob(os.path.join(output_dir, "*.tflite")):
+# ── Report ──
+for f in glob.glob(os.path.join(output_dir, "*.gguf")):
     size_mb = os.path.getsize(f) / 1024**2
     print(f"  {{os.path.basename(f)}} ({{size_mb:.0f}} MB)")
 """)
 
     # ══════════════════════════════════════════════════════════
-    #  PHASE 2C: Bundle .tflite + tokenizer → .litertlm
+    #  PHASE 2C: Upload GGUF to HuggingFace with model card
     # ══════════════════════════════════════════════════════════
-    #
-    # The .litertlm format is a single-file bundle containing:
-    #   - The quantized .tflite model
-    #   - The tokenizer (sentencepiece or HF tokenizer.json)
-    #   - Metadata (stop tokens, context length, model type)
-    #
-    # This bundle is what Google AI Edge Gallery and MediaPipe's
-    # LLM Inference API load directly on Android.
-    #
-    # Gemma 3 token config:
-    #   BOS = 2 (<bos>)          — prepended to every prompt
-    #   EOS = 1 (<eos>)          — end of sequence
-    #   EOT = 106 (<end_of_turn>) — end of a chat turn
 
-    run_py("Phase 2C: Bundle .litertlm", f"""
-import os
-import glob
-import shutil
+    run_py("Phase 2C: Upload to HuggingFace", f"""
+import os, glob
+from huggingface_hub import HfApi, create_repo
 
-output_dir = "{OUTPUT_DIR}"
-merged_dir = "{MERGED_DIR}"
+token = os.environ.get("HF_TOKEN", "")
+if not token:
+    print("No HF_TOKEN set, skipping upload")
+    print("To upload manually:")
+    print("  huggingface-cli upload {HF_USERNAME}/{MODEL_NAME}-GGUF {OUTPUT_DIR}/")
+    exit(0)
 
-# ── Locate the .tflite file ──
-tflites = glob.glob(os.path.join(output_dir, "*.tflite"))
-if not tflites:
-    print("ERROR: No .tflite file found in " + output_dir)
-    exit(1)
-tflite_path = tflites[0]
-print(f"TFLite model: {{tflite_path}}")
+api = HfApi(token=token)
+username = api.whoami()["name"]
+repo_id = f"{{username}}/{MODEL_NAME}-GGUF"
 
-# ── Locate the tokenizer ──
-# The bundler needs either tokenizer.json (HF format) or
-# tokenizer.model (SentencePiece). Gemma 3 ships both.
-tokenizer_json = os.path.join(merged_dir, "tokenizer.json")
-tokenizer_model = os.path.join(merged_dir, "tokenizer.model")
+print(f"Uploading to {{repo_id}}")
+create_repo(repo_id, token=token, exist_ok=True, repo_type="model")
 
-# Prefer tokenizer.json for HF-based bundlers
-if os.path.exists(tokenizer_json):
-    tokenizer_path = tokenizer_json
-    print(f"Tokenizer: {{tokenizer_json}}")
-elif os.path.exists(tokenizer_model):
-    tokenizer_path = tokenizer_model
-    print(f"Tokenizer: {{tokenizer_model}}")
-else:
-    print("ERROR: No tokenizer found in " + merged_dir)
-    exit(1)
-
-# ── Strategy A: MediaPipe / LiteRT bundler API ──
-#
-# The BundleConfig approach packages everything into a single
-# .litertlm file that Android's LLM Inference API can load.
-
-bundled = False
-try:
-    from mediapipe.tasks.genai import bundler
-
-    bundle_output = os.path.join(output_dir, "{MODEL_NAME}.litertlm")
-
-    # BundleConfig wraps all the metadata the on-device runtime needs:
-    #   - tflite_model: path to the quantized model
-    #   - tokenizer_model: path to the tokenizer file
-    #   - start_token: BOS token string for Gemma 3
-    #   - stop_tokens: tokens that signal generation should stop
-    #   - output_filename: where to write the .litertlm bundle
-    config = bundler.BundleConfig(
-        tflite_model=tflite_path,
-        tokenizer_model=tokenizer_path,
-        start_token="<bos>",
-        stop_tokens=["<eos>", "<end_of_turn>"],
-        output_filename=bundle_output,
-    )
-    bundler.create_bundle(config)
-    bundled = True
-    print(f"Bundled via MediaPipe: {{bundle_output}}")
-
-except (ImportError, Exception) as e:
-    print(f"MediaPipe bundler unavailable: {{e}}")
-    print("Falling back to litert-torch build_litertlm...")
-
-# ── Strategy B: litert-torch build_litertlm ──
-if not bundled:
-    from litert_torch.generative.utilities.litertlm_builder import build_litertlm
-
-    workdir = os.path.join(output_dir, "_bundle_tmp")
-    os.makedirs(workdir, exist_ok=True)
-
-    # build_litertlm bundles the TFLite model with the tokenizer
-    # and embeds metadata (stop tokens, context length, model family).
-    build_litertlm(
-        tflite_model_path=tflite_path,
-        workdir=workdir,
-        output_path=output_dir,
-        context_length={KV_CACHE_MAX_LEN},
-        hf_tokenizer_model_path=tokenizer_path,
-        llm_model_type="gemma3",
-        stop_token_ids={STOP_TOKEN_IDS},
+# ── Upload GGUF file ──
+for f in glob.glob(os.path.join("{OUTPUT_DIR}", "*.gguf")):
+    fname = os.path.basename(f)
+    size_mb = os.path.getsize(f) / 1024**2
+    print(f"  Uploading {{fname}} ({{size_mb:.0f}} MB)")
+    api.upload_file(
+        path_or_fileobj=f,
+        path_in_repo=fname,
+        repo_id=repo_id,
+        token=token,
     )
 
-    # Clean up temp directory
-    if os.path.exists(workdir):
-        shutil.rmtree(workdir)
+# ── Upload model card ──
+model_card = '''---
+license: gemma
+language:
+- en
+tags:
+- rust
+- programming-tutor
+- gguf
+- gemma3
+- on-device
+- llama-cpp
+base_model: google/gemma-3-4b-it
+pipeline_tag: text-generation
+quantized_by: llama.cpp
+---
 
-# ── Report output ──
-for f in os.listdir(output_dir):
-    if f.endswith(".litertlm"):
-        size_mb = os.path.getsize(os.path.join(output_dir, f)) / 1024**2
-        print(f"  {{f}} ({{size_mb:.0f}} MB)")
+# RustMentor 4B — GGUF (Q4_K_M)
+
+A Rust programming tutor fine-tuned from **Gemma 3 4B-IT**.
+Teaches Rust by drawing comparisons to Python, Go, and TypeScript.
+
+## Model Details
+
+| | |
+|---|---|
+| **Base model** | [google/gemma-3-4b-it](https://huggingface.co/google/gemma-3-4b-it) |
+| **Fine-tuning** | QLoRA (r=16, alpha=16) via Unsloth + TRL |
+| **Quantization** | Q4_K_M (k-quant mixed precision via llama.cpp) |
+| **Size** | ~2.5 GB |
+| **Format** | GGUF (compatible with llama.cpp, PocketPal AI, Maid) |
+| **License** | [Gemma](https://ai.google.dev/gemma/terms) |
+
+## Intended Use
+
+Offline Android coding tutor for developers learning Rust. The model:
+- Explains Rust concepts using parallels to Python, Go, and TypeScript
+- Covers ownership, borrowing, lifetimes, traits, error handling, async, and more
+- Refuses out-of-domain questions (non-Rust topics)
+- Resists prompt injection attempts
+
+## How to Run
+
+**PocketPal AI (Android):**
+Download from the Play Store, then load this model from the HF Hub.
+
+**llama.cpp (CLI):**
+```bash
+./llama-cli -m rust-mentor-4b-Q4_K_M.gguf -p "<start_of_turn>user\\nExplain ownership in Rust<end_of_turn>\\n<start_of_turn>model\\n"
+```
+
+## Training Data
+
+Fine-tuned on 500 samples covering:
+- 16 Rust teaching conversations (ownership, borrowing, lifetimes, traits, enums, pattern matching, async, iterators, structs, strings, serde, cargo, error handling, testing, memory model)
+- 10 out-of-domain refusal examples (Java, C++, Ruby, cooking, math, etc.)
+- 9 prompt injection hardening examples (persona override, instruction extraction, jailbreak roleplay, encoded bypass, etc.)
+
+## Limitations
+
+- Focused exclusively on Rust — will refuse other programming languages
+- Comparisons are anchored to Python, Go, and TypeScript only
+- 4B model may occasionally produce less precise answers than 8B+ models
+- Q4_K_M quantization may reduce quality on nuanced reasoning tasks
+'''
+
+api.upload_file(
+    path_or_fileobj=model_card.encode(),
+    path_in_repo="README.md",
+    repo_id=repo_id,
+    token=token,
+)
+print(f"Uploaded model card")
+print(f"https://huggingface.co/{{repo_id}}")
 """)
 
     # ══════════════════════════════════════════════════════════
@@ -1760,7 +1652,7 @@ for f in os.listdir(output_dir):
     # ══════════════════════════════════════════════════════════
     #
     # The merged fp16 checkpoint is ~8GB and is no longer needed
-    # after conversion. Delete it to free disk space.
+    # after GGUF conversion. Delete it to free disk space.
 
     import shutil
     if os.path.exists(MERGED_DIR):
@@ -1776,8 +1668,8 @@ for f in os.listdir(output_dir):
     print(f"\n{'=' * 64}")
     print(f"  Pipeline complete! ({total:.0f}s / {total / 60:.1f}min)")
     print(f"{'=' * 64}")
-    print(f"  Adapter:  {ADAPTER_DIR}/")
-    print(f"  LiteRT:   {OUTPUT_DIR}/")
+    print(f"  Adapter: {ADAPTER_DIR}/")
+    print(f"  GGUF:    {OUTPUT_DIR}/")
     print()
     print("  Output files:")
 
@@ -1792,10 +1684,11 @@ for f in os.listdir(output_dir):
     print()
     print("  Next steps:")
     print("    1. Upload to HuggingFace:")
-    print(f"       huggingface-cli upload {HF_USERNAME}/{REPO_NAME} {OUTPUT_DIR}/")
-    print("    2. Load in Google AI Edge Gallery on Android")
-    print("    3. Or use MediaPipe LLM Inference API:")
-    print("       val llmInference = LlmInference.createFromBundlePath(context, bundlePath)")
+    print(f"       huggingface-cli upload {HF_USERNAME}/{REPO_NAME}-GGUF {OUTPUT_DIR}/")
+    print("    2. Load on Android via PocketPal AI (Play Store):")
+    print("       Download .gguf from HF Hub directly in the app")
+    print("    3. Or integrate llama.cpp into a custom Android app:")
+    print("       github.com/ggerganov/llama.cpp/tree/master/examples/llama.android")
     print(f"{'=' * 64}")
 
 
