@@ -1499,6 +1499,21 @@ os.makedirs(output_dir, exist_ok=True)
 f16_gguf = os.path.join(output_dir, "{MODEL_NAME}-f16.gguf")
 final_gguf = os.path.join(output_dir, "{MODEL_NAME}-Q4_K_M.gguf")
 
+# ── Step 0: Restore original tokenizer ──
+# Unsloth may modify the tokenizer during training (extra tokens,
+# changed pre-tokenizer config). llama.cpp's converter checks the
+# tokenizer hash and rejects unknown configs. Fix: download the
+# original tokenizer from the base model.
+print("Restoring original tokenizer from {FULL_PRECISION_MODEL}...")
+from huggingface_hub import snapshot_download
+snapshot_download(
+    "{FULL_PRECISION_MODEL}",
+    local_dir=merged_dir,
+    allow_patterns=["tokenizer*", "special_tokens_map*"],
+    token=os.environ.get("HF_TOKEN", ""),
+)
+print("  Original tokenizer restored")
+
 # ── Step 1: HuggingFace → f16 GGUF ──
 # convert_hf_to_gguf.py reads safetensors + config.json and writes
 # a single .gguf file with all weights in float16.
